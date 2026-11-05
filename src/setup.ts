@@ -1,0 +1,19 @@
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+
+// Global app configuration: API prefix, CORS and request validation
+export function configureApp(app: INestApplication) {
+  const config = app.get(ConfigService);
+
+  app.setGlobalPrefix('api');
+  app.enableCors({
+    origin: config
+      .get<string>('FRONTEND_URL', 'http://localhost:3010')
+      .split(',')
+      .map((origin) => origin.trim()),
+  });
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+  );
+  app.enableShutdownHooks();
+}
