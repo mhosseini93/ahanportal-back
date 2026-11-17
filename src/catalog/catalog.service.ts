@@ -19,7 +19,6 @@ import {
 import { DatabaseService } from '../database/database.service.js';
 import {
   attributes,
-  priceListProducts,
   products,
   productTypes,
   type TypeAttribute,
@@ -145,14 +144,6 @@ export class CatalogService {
       .from(products)
       .groupBy(products.productTypeId)
       .as('counts');
-    const listCounts = this.db
-      .select({
-        typeId: priceListProducts.productTypeId,
-        n: count().as('price_list_product_count'),
-      })
-      .from(priceListProducts)
-      .groupBy(priceListProducts.productTypeId)
-      .as('list_counts');
     const rows = await this.db
       .select({
         id: productTypes.id,
@@ -167,11 +158,9 @@ export class CatalogService {
         isActive: productTypes.isActive,
         updatedAt: productTypes.updatedAt,
         productCount: sql<number>`coalesce(${counts.n}, 0)::int`,
-        priceListProductCount: sql<number>`coalesce(${listCounts.n}, 0)::int`,
       })
       .from(productTypes)
       .leftJoin(counts, eq(counts.typeId, productTypes.id))
-      .leftJoin(listCounts, eq(listCounts.typeId, productTypes.id))
       .orderBy(asc(productTypes.position), asc(productTypes.name));
     return rows;
   }
@@ -183,56 +172,17 @@ export class CatalogService {
       .where(eq(productTypes.id, id))
       .limit(1);
     if (!row) throw new NotFoundException('نوع کالا پیدا نشد');
-    const selectedProducts = await this.db
-      .select({
-        id: products.id,
-        name: products.name,
-        slug: products.slug,
-        code: products.code,
-        crmId: products.crmId,
-        unit: products.unit,
-        status: products.status,
-        crmActive: products.crmActive,
-        price: products.price,
-        priceUpdatedAt: products.priceUpdatedAt,
-        updatedAt: products.updatedAt,
-        productTypeId: products.productTypeId,
-        typeName: productTypes.name,
-      })
-      .from(priceListProducts)
-      .innerJoin(products, eq(products.id, priceListProducts.productId))
-      .innerJoin(productTypes, eq(productTypes.id, products.productTypeId))
-      .where(eq(priceListProducts.productTypeId, id))
-      .orderBy(asc(products.position), asc(products.name));
-    return {
-      ...row,
-      priceListProductIds: selectedProducts.map((product) => product.id),
-      priceListProducts: selectedProducts,
-    };
+    return row;
   }
 
   async createType(dto: UpsertProductTypeDto) {
     const values = await this.typeValues(null, dto);
-    const productIds = await this.validPriceListProductIds(
-      dto.priceListProductIds,
-    );
     try {
-      const id = await this.db.transaction(async (tx) => {
-        const [row] = await tx
-          .insert(productTypes)
-          .values(values)
-          .returning({ id: productTypes.id });
-        if (productIds.length) {
-          await tx.insert(priceListProducts).values(
-            productIds.map((productId) => ({
-              productTypeId: row.id,
-              productId,
-            })),
-          );
-        }
-        return row.id;
-      });
-      return this.getType(id);
+      const [row] = await this.db
+        .insert(productTypes)
+        .values(values)
+        .returning();
+      return row;
     } catch (error) {
       rethrow(error);
     }
@@ -240,49 +190,19 @@ export class CatalogService {
 
   async updateType(id: number, dto: UpsertProductTypeDto) {
     const values = await this.typeValues(id, dto);
-    const productIds = await this.validPriceListProductIds(
-      dto.priceListProductIds,
-    );
     try {
-      await this.db.transaction(async (tx) => {
-        const [row] = await tx
-          .update(productTypes)
-          .set(values)
-          .where(eq(productTypes.id, id))
-          .returning({ id: productTypes.id });
-        if (!row) throw new NotFoundException('نوع کالا پیدا نشد');
-        await tx
-          .delete(priceListProducts)
-          .where(eq(priceListProducts.productTypeId, id));
-        if (productIds.length) {
-          await tx
-            .insert(priceListProducts)
-            .values(
-              productIds.map((productId) => ({ productTypeId: id, productId })),
-            );
-        }
-      });
+      const [row] = await this.db
+        .update(productTypes)
+        .set(values)
+        .where(eq(productTypes.id, id))
+        .returning({ id: productTypes.id });
+      if (!row) throw new NotFoundException('نوع کالا پیدا نشد');
       // The type's name or name structure may have changed: rebuild product names below it
       const renamed = await this.renameProducts(id);
       return { ...(await this.getType(id)), renamed };
     } catch (error) {
       rethrow(error);
     }
-  }
-
-  private async validPriceListProductIds(input: number[]) {
-    const ids = [...new Set(input)];
-    if (!ids.length) return ids;
-    const rows = await this.db
-      .select({ id: products.id })
-      .from(products)
-      .where(inArray(products.id, ids));
-    if (rows.length !== ids.length) {
-      throw new BadRequestException(
-        'یک یا چند کالای انتخاب‌شده برای لیست قیمت پیدا نشد',
-      );
-    }
-    return ids;
   }
 
   // Rebuilds the auto names (name_locked = false) of products in a type and all its

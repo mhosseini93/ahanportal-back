@@ -104,12 +104,6 @@ export class UpsertProductTypeDto {
   @IsString()
   groupBy?: string | null;
 
-  @IsArray()
-  @ArrayMaxSize(5000, { message: 'هر لیست قیمت حداکثر ۵۰۰۰ کالا دارد' })
-  @IsInt({ each: true, message: 'شناسه کالاهای لیست قیمت معتبر نیست' })
-  @Min(1, { each: true })
-  priceListProductIds!: number[];
-
   // '@type' and attribute keys, in name order; empty = inherit from the parent
   @IsArray()
   @ArrayMaxSize(12, { message: 'ساختار نام حداکثر ۱۲ بخش دارد' })

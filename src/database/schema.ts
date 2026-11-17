@@ -27,7 +27,10 @@ export const settings = pgTable('settings', {
   updatedAt: updatedAt(),
 });
 
-// Product categories (rebar, beams, sheets, ...)
+export type PriceListColumn = { key: string; label: string };
+
+// Product categories (rebar, beams, sheets, ...) each define one public price
+// list independently from the product-type tree.
 export const categories = pgTable('categories', {
   id: serial('id').primaryKey(),
   name: text('name').notNull(),
@@ -37,6 +40,11 @@ export const categories = pgTable('categories', {
   position: integer('position').notNull().default(0),
   showOnHome: boolean('show_on_home').notNull().default(true),
   isActive: boolean('is_active').notNull().default(true),
+  priceListColumns: jsonb('price_list_columns')
+    .$type<PriceListColumn[]>()
+    .notNull()
+    .default([]),
+  priceListGroupBy: text('price_list_group_by'),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -134,20 +142,20 @@ export const products = pgTable(
   (t) => [index('products_type_idx').on(t.productTypeId)],
 );
 
-// Explicit products shown in a product type's public price list. A product may
-// be reused in more than one list, while deleting either side removes the link.
-export const priceListProducts = pgTable(
-  'price_list_products',
+// Explicit products shown in a category's public price list. A product may be
+// reused in more than one list, while deleting either side removes the link.
+export const categoryPriceListProducts = pgTable(
+  'category_price_list_products',
   {
-    productTypeId: integer('product_type_id')
+    categoryId: integer('category_id')
       .notNull()
-      .references(() => productTypes.id, { onDelete: 'cascade' }),
+      .references(() => categories.id, { onDelete: 'cascade' }),
     productId: integer('product_id')
       .notNull()
       .references(() => products.id, { onDelete: 'cascade' }),
   },
   (t) => [
-    primaryKey({ columns: [t.productTypeId, t.productId] }),
-    index('price_list_products_product_idx').on(t.productId),
+    primaryKey({ columns: [t.categoryId, t.productId] }),
+    index('category_price_list_products_product_idx').on(t.productId),
   ],
 );
