@@ -19,7 +19,8 @@
     "db:create": "node scripts/create-db.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "import:ahanonline": "node scripts/import-ahanonline.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
