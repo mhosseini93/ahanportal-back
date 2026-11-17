@@ -360,10 +360,10 @@ export class CatalogService {
   // --- Products --------------------------------------------------------------
 
   async listProducts(query: ProductListQuery) {
-    const filters: SQL[] = [];
+    const scopeFilters: SQL[] = [];
     if (query.q) {
       const like = `%${query.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      filters.push(
+      scopeFilters.push(
         or(
           ilike(products.name, like),
           ilike(products.code, like),
@@ -371,56 +371,118 @@ export class CatalogService {
         )!,
       );
     }
-    if (query.typeId) filters.push(eq(products.productTypeId, query.typeId));
-    if (query.rootTypeId) {
-      filters.push(
-        inArray(
-          products.productTypeId,
-          await this.subtreeTypeIds(query.rootTypeId),
-        ),
+    if (query.typeId)
+      scopeFilters.push(eq(products.productTypeId, query.typeId));
+    const roots = [
+      ...(query.rootTypeIds ?? []),
+      ...(query.rootTypeId ? [query.rootTypeId] : []),
+    ];
+    if (roots.length) {
+      scopeFilters.push(
+        inArray(products.productTypeId, await this.subtreeTypeIds(roots)),
       );
     }
-    if (query.status) filters.push(eq(products.status, query.status));
+    if (query.status) scopeFilters.push(eq(products.status, query.status));
+
+    const definitions = await this.listAttributes();
+    const knownAttributes = new Set(
+      definitions.map((attribute) => attribute.key),
+    );
+    const attributeFilters: Record<string, string> = {};
+    const requestedFilters = Object.entries(query.attributeFilters ?? {});
+    if (requestedFilters.length > 30) {
+      throw new BadRequestException('تعداد فیلترهای ویژگی بیش از حد مجاز است');
+    }
+    for (const [key, value] of requestedFilters) {
+      if (!knownAttributes.has(key) || typeof value !== 'string') {
+        throw new BadRequestException(`فیلتر ویژگی «${key}» معتبر نیست`);
+      }
+      const text = value.trim();
+      if (text) attributeFilters[key] = text.slice(0, 100);
+    }
+
+    const filters = [...scopeFilters];
+    if (Object.keys(attributeFilters).length) {
+      filters.push(
+        sql`${products.attributes} @> ${JSON.stringify(attributeFilters)}::jsonb`,
+      );
+    }
+    const scopeWhere = scopeFilters.length ? and(...scopeFilters) : undefined;
     const where = filters.length ? and(...filters) : undefined;
 
     const page = query.page ?? 1;
-    const [{ total }] = await this.db
-      .select({ total: count() })
-      .from(products)
-      .where(where);
-    const items = await this.db
-      .select({
-        id: products.id,
-        name: products.name,
-        slug: products.slug,
-        code: products.code,
-        crmId: products.crmId,
-        unit: products.unit,
-        status: products.status,
-        crmActive: products.crmActive,
-        price: products.price,
-        priceUpdatedAt: products.priceUpdatedAt,
-        updatedAt: products.updatedAt,
-        productTypeId: products.productTypeId,
-        typeName: productTypes.name,
-      })
-      .from(products)
-      .innerJoin(productTypes, eq(productTypes.id, products.productTypeId))
-      .where(where)
-      .orderBy(desc(products.updatedAt), desc(products.id))
-      .limit(PAGE_SIZE)
-      .offset((page - 1) * PAGE_SIZE);
-    return { items, total, page, pageSize: PAGE_SIZE };
+    const [[{ total }], items, facetSource] = await Promise.all([
+      this.db.select({ total: count() }).from(products).where(where),
+      this.db
+        .select({
+          id: products.id,
+          name: products.name,
+          slug: products.slug,
+          code: products.code,
+          crmId: products.crmId,
+          unit: products.unit,
+          status: products.status,
+          crmActive: products.crmActive,
+          price: products.price,
+          priceUpdatedAt: products.priceUpdatedAt,
+          updatedAt: products.updatedAt,
+          productTypeId: products.productTypeId,
+          typeName: productTypes.name,
+        })
+        .from(products)
+        .innerJoin(productTypes, eq(productTypes.id, products.productTypeId))
+        .where(where)
+        .orderBy(desc(products.updatedAt), desc(products.id))
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE),
+      query.includeFacets
+        ? this.db
+            .select({ attributes: products.attributes })
+            .from(products)
+            .where(scopeWhere)
+        : Promise.resolve([]),
+    ]);
+
+    const facetCounts = new Map<string, Map<string, number>>();
+    for (const product of facetSource) {
+      for (const [key, value] of Object.entries(product.attributes)) {
+        if (!knownAttributes.has(key) || !value) continue;
+        const values = facetCounts.get(key) ?? new Map<string, number>();
+        values.set(value, (values.get(value) ?? 0) + 1);
+        facetCounts.set(key, values);
+      }
+    }
+    const facets = definitions.flatMap((attribute) => {
+      const counts = facetCounts.get(attribute.key);
+      if (!counts?.size) return [];
+      return [
+        {
+          key: attribute.key,
+          label: attribute.name,
+          unit: attribute.unit,
+          values: [...counts.entries()]
+            .sort(([left], [right]) =>
+              left.localeCompare(right, 'fa', { numeric: true }),
+            )
+            .slice(0, 200)
+            .map(([value, count]) => ({ value, count })),
+        },
+      ];
+    });
+
+    return { items, total, page, pageSize: PAGE_SIZE, facets };
   }
 
-  private async subtreeTypeIds(rootId: number) {
+  private async subtreeTypeIds(input: number | number[]) {
+    const rootIds = [...new Set(Array.isArray(input) ? input : [input])];
     const rows = await this.db
       .select({ id: productTypes.id, parentId: productTypes.parentId })
       .from(productTypes);
-    if (!rows.some((row) => row.id === rootId)) {
-      throw new BadRequestException('دسته‌بندی اصلی پیدا نشد');
+    const known = new Set(rows.map((row) => row.id));
+    if (rootIds.some((rootId) => !known.has(rootId))) {
+      throw new BadRequestException('یک یا چند دسته‌بندی اصلی پیدا نشد');
     }
-    const ids = new Set([rootId]);
+    const ids = new Set(rootIds);
     for (let grew = true; grew;) {
       grew = false;
       for (const row of rows) {

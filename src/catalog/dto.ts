@@ -27,6 +27,24 @@ const emptyToNull = ({ value }: { value: unknown }) => {
 const toInt = ({ value }: { value: unknown }) =>
   value === undefined || value === '' ? undefined : Number(value);
 
+const toIntArray = ({ value }: { value: unknown }) => {
+  if (Array.isArray(value)) return value.map(Number);
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value.split(',').map(Number);
+};
+
+const toAttributeFilters = ({ value }: { value: unknown }) => {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+};
+
+const toBoolean = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value === 'true' : value;
+
 export class UpsertAttributeDto {
   // Ignored on update: products store their values under this key
   @Transform(trim)
@@ -187,6 +205,25 @@ export class ProductListQuery {
   @IsInt()
   @Min(1)
   rootTypeId?: number;
+
+  // Includes products from all selected top-level types and their descendants.
+  @IsOptional()
+  @Transform(toIntArray)
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  rootTypeIds?: number[];
+
+  @IsOptional()
+  @Transform(toAttributeFilters)
+  @IsObject({ message: 'فیلتر ویژگی‌های کالا معتبر نیست' })
+  attributeFilters?: Record<string, unknown>;
+
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  includeFacets?: boolean;
 
   @IsOptional()
   @IsIn(PRODUCT_STATUSES)
