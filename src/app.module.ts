@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { AuthModule } from './auth/auth.module.js';
-import { CatalogModule } from './catalog/catalog.module.js';
 import { CategoriesModule } from './categories/categories.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { SettingsModule } from './settings/settings.module.js';
@@ -16,7 +15,6 @@ import { UploadsController } from './uploads/uploads.controller.js';
     AuthModule,
     SettingsModule,
     CategoriesModule,
-    CatalogModule,
   ],
   controllers: [AppController, UploadsController],
   providers: [AppService],
