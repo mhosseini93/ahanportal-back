@@ -1,16 +1,65 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN, trim } from '../content.js';
+
+export class AttributeValuesQuery {
+  @Transform(({ value }: { value: unknown }) => Number(value))
+  @IsInt({ message: 'نوع کالا را انتخاب کنید' })
+  typeId!: number;
+
+  // "0" = only the type itself; anything else (or missing) includes sub-types
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value !== '0' && value !== 'false')
+  @IsBoolean()
+  subtypes?: boolean;
+}
+
+// One part of a category's price list; the service checks keys against the type
+export class CategorySectionDto {
+  @IsInt({ message: 'نوع کالای هر بخش را انتخاب کنید' })
+  productTypeId!: number;
+
+  @Transform(trim)
+  @IsString()
+  @MaxLength(100, { message: 'عنوان بخش حداکثر ۱۰۰ کاراکتر است' })
+  title!: string;
+
+  @IsBoolean()
+  includeSubtypes!: boolean;
+
+  // Allowed values per attribute key; checked value by value in the service
+  @IsObject({ message: 'فیلتر بخش معتبر نیست' })
+  filters!: Record<string, string[]>;
+
+  @IsArray()
+  @ArrayMaxSize(2000, { message: 'تعداد کالاهای کنارگذاشته زیاد است' })
+  @IsInt({ each: true })
+  excludedIds!: number[];
+
+  @IsArray()
+  @ArrayMaxSize(20, { message: 'هر بخش حداکثر ۲۰ ستون دارد' })
+  @IsString({ each: true })
+  columns!: string[];
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => (value === '' ? null : value))
+  @IsString()
+  groupBy?: string | null;
+}
 
 export class UpsertCategoryDto {
   @Transform(trim)
@@ -50,4 +99,11 @@ export class UpsertCategoryDto {
 
   @IsBoolean()
   isActive!: boolean;
+
+  // The category's price list, in order; replaces the saved sections
+  @IsArray()
+  @ArrayMaxSize(30, { message: 'هر دسته حداکثر ۳۰ بخش دارد' })
+  @ValidateNested({ each: true })
+  @Type(() => CategorySectionDto)
+  sections!: CategorySectionDto[];
 }

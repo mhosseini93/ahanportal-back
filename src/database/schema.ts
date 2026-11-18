@@ -122,3 +122,38 @@ export const products = pgTable(
   },
   (t) => [index('products_type_idx').on(t.productTypeId)],
 );
+
+// ---------------------------------------------------------------------------
+// Category price lists: each category's price list is made of ordered sections.
+// A section is one product type (optionally with its sub-types) plus a saved
+// filter, so new matching products join the list on their own.
+
+// Columns of a section table: attribute keys plus these tokens
+export const COLUMN_NAME = '@name';
+export const COLUMN_UNIT = '@unit';
+
+export const categorySections = pgTable(
+  'category_sections',
+  {
+    id: serial('id').primaryKey(),
+    categoryId: integer('category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'cascade' }),
+    productTypeId: integer('product_type_id')
+      .notNull()
+      .references(() => productTypes.id, { onDelete: 'restrict' }),
+    // Heading above the section table; empty = the product type's name
+    title: text('title').notNull().default(''),
+    includeSubtypes: boolean('include_subtypes').notNull().default(true),
+    // Allowed values per attribute key; a key that is missing or empty doesn't filter
+    filters: jsonb('filters').$type<Record<string, string[]>>().notNull().default({}),
+    // Products that match the filter but are left out by hand
+    excludedIds: jsonb('excluded_ids').$type<number[]>().notNull().default([]),
+    // Table columns in order: attribute keys, '@name', '@unit' (price is always shown)
+    columns: jsonb('columns').$type<string[]>().notNull().default([]),
+    // Split the table by an attribute key; null = one table
+    groupBy: text('group_by'),
+    position: integer('position').notNull().default(0),
+  },
+  (t) => [index('category_sections_category_idx').on(t.categoryId)],
+);

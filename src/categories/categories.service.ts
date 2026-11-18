@@ -1,8 +1,24 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, count, eq, sql } from 'drizzle-orm';
 import { DatabaseService } from '../database/database.service.js';
-import { categories } from '../database/schema.js';
-import type { UpsertCategoryDto } from './dto.js';
+import {
+  attributes,
+  categories,
+  categorySections,
+  products,
+  productTypes,
+} from '../database/schema.js';
+import type { CategorySectionDto, UpsertCategoryDto } from './dto.js';
+import {
+  cleanSection,
+  sectionMatch,
+  sectionShown,
+  sectionTypeIds,
+  type SectionValues,
+} from './price-sections.js';
+
+// Rows shown in the editor's preview of one section
+const PREVIEW_LIMIT = 300;
 
 function isUniqueViolation(error: unknown): boolean {
   const e = error as { code?: string; cause?: { code?: string } };
@@ -28,34 +44,65 @@ export class CategoriesService {
       .orderBy(...ordered);
   }
 
-  adminList() {
-    return this.db.select().from(categories).orderBy(...ordered);
+  // All categories with how many sections their price list has
+  async adminList() {
+    const sections = this.db
+      .select({ categoryId: categorySections.categoryId, n: count().as('n') })
+      .from(categorySections)
+      .groupBy(categorySections.categoryId)
+      .as('sections');
+    const rows = await this.db
+      .select({ category: categories, sectionCount: sql<number>`coalesce(${sections.n}, 0)::int` })
+      .from(categories)
+      .leftJoin(sections, eq(sections.categoryId, categories.id))
+      .orderBy(...ordered);
+    return rows.map((r) => ({ ...r.category, sectionCount: r.sectionCount }));
   }
 
   async adminGet(id: number) {
     const [row] = await this.db.select().from(categories).where(eq(categories.id, id)).limit(1);
     if (!row) throw new NotFoundException('دسته پیدا نشد');
-    return row;
+    return { ...row, sections: await this.sections(id) };
   }
 
   async create(dto: UpsertCategoryDto) {
+    const sections = await this.cleanSections(dto.sections);
     try {
-      const [row] = await this.db.insert(categories).values(this.values(dto)).returning();
-      return row;
+      const row = await this.db.transaction(async (tx) => {
+        const [created] = await tx.insert(categories).values(this.values(dto)).returning();
+        if (sections.length) {
+          await tx
+            .insert(categorySections)
+            .values(sections.map((s, position) => ({ ...s, categoryId: created.id, position })));
+        }
+        return created;
+      });
+      return { ...row, sections: await this.sections(row.id) };
     } catch (error) {
       this.rethrow(error);
     }
   }
 
   async update(id: number, dto: UpsertCategoryDto) {
+    const sections = await this.cleanSections(dto.sections);
     try {
-      const [row] = await this.db
-        .update(categories)
-        .set(this.values(dto))
-        .where(eq(categories.id, id))
-        .returning();
-      if (!row) throw new NotFoundException('دسته پیدا نشد');
-      return row;
+      const row = await this.db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(categories)
+          .set(this.values(dto))
+          .where(eq(categories.id, id))
+          .returning();
+        if (!updated) throw new NotFoundException('دسته پیدا نشد');
+        // The editor sends the whole price list: replace the saved sections
+        await tx.delete(categorySections).where(eq(categorySections.categoryId, id));
+        if (sections.length) {
+          await tx
+            .insert(categorySections)
+            .values(sections.map((s, position) => ({ ...s, categoryId: id, position })));
+        }
+        return updated;
+      });
+      return { ...row, sections: await this.sections(id) };
     } catch (error) {
       this.rethrow(error);
     }
@@ -68,6 +115,93 @@ export class CategoriesService {
       .returning({ id: categories.id });
     if (!deleted.length) throw new NotFoundException('دسته پیدا نشد');
     return { ok: true };
+  }
+
+  // --- Price list sections ---------------------------------------------------
+
+  private sections(categoryId: number) {
+    return this.db
+      .select({
+        id: categorySections.id,
+        productTypeId: categorySections.productTypeId,
+        title: categorySections.title,
+        includeSubtypes: categorySections.includeSubtypes,
+        filters: categorySections.filters,
+        excludedIds: categorySections.excludedIds,
+        columns: categorySections.columns,
+        groupBy: categorySections.groupBy,
+      })
+      .from(categorySections)
+      .where(eq(categorySections.categoryId, categoryId))
+      .orderBy(asc(categorySections.position), asc(categorySections.id));
+  }
+
+  private async catalogKeys() {
+    const [types, attrs] = await Promise.all([
+      this.db.select({ id: productTypes.id, parentId: productTypes.parentId }).from(productTypes),
+      this.db.select({ key: attributes.key }).from(attributes),
+    ]);
+    return { types, typeIds: new Set(types.map((t) => t.id)), keys: new Set(attrs.map((a) => a.key)) };
+  }
+
+  private async cleanSections(list: CategorySectionDto[]): Promise<SectionValues[]> {
+    if (!list.length) return [];
+    const { typeIds, keys } = await this.catalogKeys();
+    return list.map((s, i) => cleanSection(s, `بخش ${(i + 1).toLocaleString('fa-IR')}`, typeIds, keys));
+  }
+
+  // Products a section picks, for the editor: how many match, how many the site
+  // will list (published, active in the CRM, not left out) and the first rows
+  async previewSection(dto: CategorySectionDto) {
+    const { types, typeIds, keys } = await this.catalogKeys();
+    const section = cleanSection(dto, 'این بخش', typeIds, keys);
+    const ids = sectionTypeIds(types, section.productTypeId, section.includeSubtypes);
+    const match = sectionMatch(section, ids);
+
+    const [[{ total }], [{ shown }], items] = await Promise.all([
+      this.db.select({ total: count() }).from(products).where(match),
+      this.db.select({ shown: count() }).from(products).where(sectionShown(section, ids)),
+      this.db
+        .select({
+          id: products.id,
+          name: products.name,
+          attributes: products.attributes,
+          unit: products.unit,
+          status: products.status,
+          crmActive: products.crmActive,
+          price: products.price,
+          productTypeId: products.productTypeId,
+        })
+        .from(products)
+        .where(match)
+        .orderBy(asc(products.position), asc(products.name), asc(products.id))
+        .limit(PREVIEW_LIMIT),
+    ]);
+    return { total, shown, limit: PREVIEW_LIMIT, items };
+  }
+
+  // Values the products of a type (and its sub-types) have, per attribute key,
+  // with how many products have each; the editor builds its filter from these
+  async attributeValues(typeId: number, includeSubtypes: boolean) {
+    const types = await this.db
+      .select({ id: productTypes.id, parentId: productTypes.parentId })
+      .from(productTypes);
+    if (!types.some((t) => t.id === typeId)) throw new NotFoundException('نوع کالا پیدا نشد');
+    const ids = sectionTypeIds(types, typeId, includeSubtypes);
+
+    const { rows } = await this.db.execute<{ key: string; value: string; n: number }>(sql`
+      SELECT e.key, e.value, count(*)::int AS n
+      FROM ${products} p CROSS JOIN LATERAL jsonb_each_text(p.attributes) e
+      WHERE p.product_type_id IN (${sql.join(
+        ids.map((id) => sql`${id}`),
+        sql`, `,
+      )})
+        AND e.value <> ''
+      GROUP BY e.key, e.value`);
+
+    const result: Record<string, { value: string; count: number }[]> = {};
+    for (const r of rows) (result[r.key] ??= []).push({ value: r.value, count: r.n });
+    return result;
   }
 
   private values(dto: UpsertCategoryDto) {

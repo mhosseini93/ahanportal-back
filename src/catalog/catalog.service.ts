@@ -6,7 +6,13 @@ import {
 } from '@nestjs/common';
 import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { DatabaseService } from '../database/database.service.js';
-import { attributes, products, productTypes, type TypeAttribute } from '../database/schema.js';
+import {
+  attributes,
+  categorySections,
+  products,
+  productTypes,
+  type TypeAttribute,
+} from '../database/schema.js';
 import type {
   ProductListQuery,
   UpsertAttributeDto,
@@ -230,6 +236,15 @@ export class CatalogService {
     if (children.n || items.n) {
       throw new ConflictException(
         'این نوع کالا زیرمجموعه یا کالا دارد؛ اول آن‌ها را حذف یا به نوع دیگری منتقل کنید',
+      );
+    }
+    const [sections] = await this.db
+      .select({ n: count() })
+      .from(categorySections)
+      .where(eq(categorySections.productTypeId, id));
+    if (sections.n) {
+      throw new ConflictException(
+        'این نوع کالا در لیست قیمت یک دسته استفاده شده است؛ اول بخش آن را از دسته حذف کنید',
       );
     }
     const deleted = await this.db

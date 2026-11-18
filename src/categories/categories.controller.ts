@@ -3,15 +3,17 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { CategoriesService } from './categories.service.js';
-import { UpsertCategoryDto } from './dto.js';
+import { AttributeValuesQuery, CategorySectionDto, UpsertCategoryDto } from './dto.js';
 
 @Controller('categories')
 export class CategoriesController {
@@ -32,6 +34,19 @@ export class AdminCategoriesController {
   @Get()
   list() {
     return this.categories.adminList();
+  }
+
+  // Filter values for a price list section (declared before ':id')
+  @Get('attribute-values')
+  attributeValues(@Query() query: AttributeValuesQuery) {
+    return this.categories.attributeValues(query.typeId, query.subtypes ?? true);
+  }
+
+  // Products an unsaved section would list
+  @Post('section-preview')
+  @HttpCode(200)
+  previewSection(@Body() dto: CategorySectionDto) {
+    return this.categories.previewSection(dto);
   }
 
   @Get(':id')
