@@ -7,6 +7,7 @@ import {
   jsonb,
   pgTable,
   primaryKey,
+  uniqueIndex,
   serial,
   text,
   timestamp,
@@ -232,4 +233,22 @@ export const postRelated = pgTable(
     position: integer('position').notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.postId, t.relatedId] })],
+);
+
+// ---------------------------------------------------------------------------
+// Price history: one row per price change (filled by the price sync), for the
+// change percent and price charts
+
+export const priceHistory = pgTable(
+  'price_history',
+  {
+    id: serial('id').primaryKey(),
+    productId: integer('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    // Rial; null = the product had no price from then on
+    price: bigint('price', { mode: 'number' }),
+    recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [uniqueIndex('price_history_product_recorded_idx').on(t.productId, t.recordedAt)],
 );
