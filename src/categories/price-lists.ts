@@ -9,12 +9,14 @@ export type PublicRow = {
   id: number;
   name: string;
   slug: string;
-  // Only the attribute values the section shows (columns and split)
+  // Only the attribute values the site needs (columns, split and filters)
   values: Record<string, string>;
   unit: string;
   // Rial; null until the CRM sync sets it
   price: number | null;
   priceUpdatedAt: Date | null;
+  // The price was set today (Tehran time); these rows come first
+  pricedToday: boolean;
 };
 
 export type PublicSection = {
@@ -70,33 +72,70 @@ export function sectionColumns(
   };
 }
 
-type RawRow = Omit<PublicRow, 'values'> & { attributes: Record<string, string> };
+// Calendar day in Tehran, e.g. "2026-11-18"
+const tehranDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' });
+export const isTehranToday = (date: Date | null, now = new Date()) =>
+  !!date && tehranDay.format(date) === tehranDay.format(now);
 
-// Rows as the site lists them: only the shown values, ordered by split value and
-// then by each column in turn
-export function publicRows(rows: RawRow[], columns: PublicColumn[], groupBy: PublicColumn | null) {
-  const keys = [...columns.map((c) => c.key), ...(groupBy ? [groupBy.key] : [])].filter(
-    (k) => k !== COLUMN_NAME && k !== COLUMN_UNIT,
-  );
+// Labels of the attributes a price list filters on (by the global attribute
+// name); unknown keys are skipped
+export function filterColumns(keys: string[], attributes: Map<string, AttributeInfo>): PublicColumn[] {
+  return keys.flatMap((key) => {
+    const attribute = attributes.get(key);
+    return attribute ? [{ key, label: attribute.name, unit: attribute.unit }] : [];
+  });
+}
+
+type RawRow = Omit<PublicRow, 'values' | 'pricedToday'> & { attributes: Record<string, string> };
+
+// Rows as the site lists them, with only the values it needs. Order: split value
+// (rows without one last), then the products priced today, then the section's
+// sort (rows without a price last when sorting by price), then id.
+export function publicRows(
+  rows: RawRow[],
+  section: Pick<SectionValues, 'sort'>,
+  columns: PublicColumn[],
+  groupBy: PublicColumn | null,
+  extraKeys: string[] = [],
+  now = new Date(),
+) {
+  const keys = [
+    ...new Set([...columns.map((c) => c.key), ...(groupBy ? [groupBy.key] : []), ...extraKeys]),
+  ].filter((k) => k !== COLUMN_NAME && k !== COLUMN_UNIT);
   const cell = (row: RawRow, key: string) =>
     key === COLUMN_NAME ? row.name : key === COLUMN_UNIT ? row.unit : (row.attributes[key] ?? '');
 
-  // Rows without a split value form the last group
   const groupOrder = (a: RawRow, b: RawRow) => {
     if (!groupBy) return 0;
     const [x, y] = [cell(a, groupBy.key), cell(b, groupBy.key)];
     return Number(!x) - Number(!y) || collator.compare(x, y);
   };
+  const byColumns = (a: RawRow, b: RawRow) =>
+    columns.reduce((r, c) => r || collator.compare(cell(a, c.key), cell(b, c.key)), 0);
+  const byPrice = (a: RawRow, b: RawRow, dir: 1 | -1) =>
+    Number(a.price === null) - Number(b.price === null) || ((a.price ?? 0) - (b.price ?? 0)) * dir;
+  const time = (row: RawRow) => row.priceUpdatedAt?.getTime() ?? 0;
+  const sortOrder: Record<SectionValues['sort'], (a: RawRow, b: RawRow) => number> = {
+    columns: byColumns,
+    price_asc: (a, b) => byPrice(a, b, 1) || byColumns(a, b),
+    price_desc: (a, b) => byPrice(a, b, -1) || byColumns(a, b),
+    name: (a, b) => collator.compare(a.name, b.name),
+    updated: (a, b) => time(b) - time(a) || byColumns(a, b),
+  };
+  const order = sortOrder[section.sort] ?? byColumns;
 
-  return [...rows]
+  const marked = rows.map((row) => ({ row, today: isTehranToday(row.priceUpdatedAt, now) }));
+  return marked
     .sort(
       (a, b) =>
-        groupOrder(a, b) ||
-        columns.reduce((r, c) => r || collator.compare(cell(a, c.key), cell(b, c.key)), 0) ||
-        a.id - b.id,
+        groupOrder(a.row, b.row) ||
+        Number(b.today) - Number(a.today) ||
+        order(a.row, b.row) ||
+        a.row.id - b.row.id,
     )
-    .map(({ attributes, ...row }) => ({
+    .map(({ row: { attributes, ...row }, today }) => ({
       ...row,
+      pricedToday: today,
       values: Object.fromEntries(keys.filter((k) => attributes[k]).map((k) => [k, attributes[k]])),
     }));
 }

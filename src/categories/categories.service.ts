@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { and, asc, count, eq, sql } from 'drizzle-orm';
 import { DatabaseService } from '../database/database.service.js';
 import {
@@ -17,6 +22,7 @@ import {
   type SectionValues,
 } from './price-sections.js';
 import {
+  filterColumns,
   publicRows,
   sectionColumns,
   type AttributeInfo,
@@ -100,6 +106,7 @@ export class CategoriesService {
 
   async create(dto: UpsertCategoryDto) {
     const sections = await this.cleanSections(dto.sections);
+    await this.checkFilterKeys(dto.filterKeys);
     try {
       const row = await this.db.transaction(async (tx) => {
         const [created] = await tx.insert(categories).values(this.values(dto)).returning();
@@ -118,6 +125,7 @@ export class CategoriesService {
 
   async update(id: number, dto: UpsertCategoryDto) {
     const sections = await this.cleanSections(dto.sections);
+    await this.checkFilterKeys(dto.filterKeys);
     try {
       const row = await this.db.transaction(async (tx) => {
         const [updated] = await tx
@@ -163,6 +171,7 @@ export class CategoriesService {
         excludedIds: categorySections.excludedIds,
         columns: categorySections.columns,
         groupBy: categorySections.groupBy,
+        sort: categorySections.sort,
       })
       .from(categorySections)
       .where(eq(categorySections.categoryId, categoryId))
@@ -181,6 +190,13 @@ export class CategoriesService {
     if (!list.length) return [];
     const { typeIds, keys } = await this.catalogKeys();
     return list.map((s, i) => cleanSection(s, `بخش ${(i + 1).toLocaleString('fa-IR')}`, typeIds, keys));
+  }
+
+  private async checkFilterKeys(list: string[] | null | undefined) {
+    if (!list?.length) return;
+    const { keys } = await this.catalogKeys();
+    const unknown = list.find((key) => !keys.has(key));
+    if (unknown) throw new BadRequestException(`ویژگی «${unknown}» در فیلترهای لیست قیمت تعریف نشده است`);
   }
 
   // Products a section picks, for the editor: how many match, how many the site
@@ -203,6 +219,7 @@ export class CategoriesService {
           status: products.status,
           crmActive: products.crmActive,
           price: products.price,
+          priceUpdatedAt: products.priceUpdatedAt,
           productTypeId: products.productTypeId,
         })
         .from(products)
@@ -272,15 +289,24 @@ export class CategoriesService {
       .limit(1);
     if (!category) throw new NotFoundException('دسته پیدا نشد');
 
-    const [sections, related] = await Promise.all([
-      this.publicContext().then((context) => this.publicSections(category.id, context)),
+    const filterKeys = category.filterKeys ?? [];
+    const [context, related] = await Promise.all([
+      this.publicContext(),
       this.db
         .select({ name: categories.name, slug: categories.slug })
         .from(categories)
         .where(and(eq(categories.isActive, true), sql`${categories.id} <> ${category.id}`))
         .orderBy(...ordered),
     ]);
-    return { category: publicCategory(category), sections, ...priceStats(sections), related };
+    const sections = await this.publicSections(category.id, context, filterKeys);
+    return {
+      category: publicCategory(category),
+      // Chosen filters in order; null = the site picks them from the columns
+      filters: category.filterKeys ? filterColumns(filterKeys, context.attributes) : null,
+      sections,
+      ...priceStats(sections),
+      related,
+    };
   }
 
   private async publicContext() {
@@ -307,7 +333,10 @@ export class CategoriesService {
   private async publicSections(
     categoryId: number,
     context: Awaited<ReturnType<CategoriesService['publicContext']>>,
+    // Attribute values rows also carry (the list's filters)
+    extraKeys: string[] = [],
   ): Promise<PublicSection[]> {
+    const now = new Date();
     const saved = await this.db
       .select()
       .from(categorySections)
@@ -335,7 +364,7 @@ export class CategoriesService {
           title: section.title || context.types.get(section.productTypeId)?.name || '',
           columns,
           groupBy,
-          rows: publicRows(rows, columns, groupBy),
+          rows: publicRows(rows, section, columns, groupBy, extraKeys, now),
         };
       }),
     );
@@ -350,6 +379,7 @@ export class CategoriesService {
       position: dto.position,
       showOnHome: dto.showOnHome,
       linkProducts: dto.linkProducts,
+      filterKeys: dto.filterKeys ? [...new Set(dto.filterKeys)] : null,
       isActive: dto.isActive,
     };
   }

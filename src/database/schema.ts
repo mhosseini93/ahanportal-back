@@ -38,6 +38,9 @@ export const categories = pgTable('categories', {
   showOnHome: boolean('show_on_home').notNull().default(true),
   // Product names in this price list link to their product pages
   linkProducts: boolean('link_products').notNull().default(true),
+  // Attribute keys the site's price list filters on, in order; null = automatic
+  // (the attributes shown as columns or splits)
+  filterKeys: jsonb('filter_keys').$type<string[] | null>(),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -136,6 +139,11 @@ export const products = pgTable(
 export const COLUMN_NAME = '@name';
 export const COLUMN_UNIT = '@unit';
 
+// How a section table's rows are ordered (inside each split, after the products
+// priced today): 'columns' = by each column in turn
+export const SECTION_SORTS = ['columns', 'price_asc', 'price_desc', 'name', 'updated'] as const;
+export type SectionSort = (typeof SECTION_SORTS)[number];
+
 export const categorySections = pgTable(
   'category_sections',
   {
@@ -157,6 +165,7 @@ export const categorySections = pgTable(
     columns: jsonb('columns').$type<string[]>().notNull().default([]),
     // Split the table by an attribute key; null = one table
     groupBy: text('group_by'),
+    sort: text('sort').$type<SectionSort>().notNull().default('columns'),
     position: integer('position').notNull().default(0),
   },
   (t) => [index('category_sections_category_idx').on(t.categoryId)],

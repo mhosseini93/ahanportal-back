@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsObject,
@@ -15,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { SLUG_MESSAGE, SLUG_PATTERN, trim } from '../content.js';
+import { SECTION_SORTS, type SectionSort } from '../database/schema.js';
 
 export class AttributeValuesQuery {
   @Transform(({ value }: { value: unknown }) => Number(value))
@@ -59,6 +61,11 @@ export class CategorySectionDto {
   @Transform(({ value }: { value: unknown }) => (value === '' ? null : value))
   @IsString()
   groupBy?: string | null;
+
+  // Missing = by the columns
+  @IsOptional()
+  @IsIn(SECTION_SORTS, { message: 'ترتیب جدول معتبر نیست' })
+  sort?: SectionSort;
 }
 
 export class UpsertCategoryDto {
@@ -99,6 +106,14 @@ export class UpsertCategoryDto {
 
   @IsBoolean()
   linkProducts!: boolean;
+
+  // Attribute keys of the site's filters, in order; null/missing = automatic.
+  // The service checks the keys exist.
+  @IsOptional()
+  @IsArray({ message: 'فیلترهای لیست قیمت معتبر نیستند' })
+  @ArrayMaxSize(20, { message: 'لیست قیمت حداکثر ۲۰ فیلتر دارد' })
+  @IsString({ each: true })
+  filterKeys?: string[] | null;
 
   @IsBoolean()
   isActive!: boolean;

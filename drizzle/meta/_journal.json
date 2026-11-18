@@ -64,6 +64,13 @@
       "when": 1795012502407,
       "tag": "0008_category_link_products",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795014956155,
+      "tag": "0009_price_list_filters_and_sort",
+      "breakpoints": true
     }
   ]
 }

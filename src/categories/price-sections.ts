@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { and, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
-import { COLUMN_NAME, COLUMN_UNIT, products } from '../database/schema.js';
+import { COLUMN_NAME, COLUMN_UNIT, products, type SectionSort } from '../database/schema.js';
 import type { CategorySectionDto } from './dto.js';
 
 export const COLUMN_TOKENS = [COLUMN_NAME, COLUMN_UNIT];
@@ -16,6 +16,7 @@ export type SectionValues = {
   excludedIds: number[];
   columns: string[];
   groupBy: string | null;
+  sort: SectionSort;
 };
 
 // A type and, when asked, every type below it
@@ -80,6 +81,7 @@ export function cleanSection(
     excludedIds: [...new Set(dto.excludedIds)],
     columns,
     groupBy,
+    sort: dto.sort ?? 'columns',
   };
 }
 
