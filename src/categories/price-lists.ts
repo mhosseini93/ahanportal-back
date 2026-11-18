@@ -38,7 +38,7 @@ export type AttributeInfo = { key: string; name: string; unit: string };
 const collator = new Intl.Collator('fa', { numeric: true });
 
 // The attributes a type uses: its own, or else the nearest ancestor's
-function effectiveAttributes(types: Map<number, TypeInfo>, id: number): TypeAttribute[] {
+export function effectiveAttributes(types: Map<number, TypeInfo>, id: number): TypeAttribute[] {
   let current = types.get(id);
   for (let guard = 0; current && guard < 50; guard++) {
     if (current.attributes.length) return current.attributes;
