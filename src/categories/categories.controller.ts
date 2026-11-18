@@ -24,6 +24,18 @@ export class CategoriesController {
   listHome() {
     return this.categories.listHome();
   }
+
+  // Public: active categories' price lists, summarized for /prices
+  @Get('price-lists')
+  priceLists() {
+    return this.categories.publicOverview();
+  }
+
+  // Public: one category's full price list for /prices/[slug]
+  @Get('price-lists/:slug')
+  priceList(@Param('slug') slug: string) {
+    return this.categories.publicPriceList(slug);
+  }
 }
 
 @Controller('admin/categories')
