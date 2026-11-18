@@ -56,3 +56,15 @@ const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
 export function sanitizeContent(html: string): string {
   return sanitizeHtml(html, SANITIZE_OPTIONS);
 }
+
+export function plainText(html: string): string {
+  return sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ~200 words per minute for Persian text
+export function readingMinutes(html: string): number {
+  const words = plainText(html).split(' ').filter(Boolean).length;
+  return Math.max(1, Math.round(words / 200));
+}

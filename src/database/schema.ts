@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -156,4 +157,79 @@ export const categorySections = pgTable(
     position: integer('position').notNull().default(0),
   },
   (t) => [index('category_sections_category_idx').on(t.categoryId)],
+);
+
+// ---------------------------------------------------------------------------
+// Blog
+
+export const POST_STATUSES = ['draft', 'published'] as const;
+export type PostStatus = (typeof POST_STATUSES)[number];
+
+// Blog categories (separate from the product categories above)
+export const blogCategories = pgTable('blog_categories', {
+  id: serial('id').primaryKey(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  // SEO; empty = built from the name
+  metaTitle: text('meta_title').notNull().default(''),
+  metaDescription: text('meta_description').notNull().default(''),
+  position: integer('position').notNull().default(0),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const posts = pgTable(
+  'posts',
+  {
+    id: serial('id').primaryKey(),
+    slug: text('slug').notNull().unique(),
+    title: text('title').notNull(),
+    excerpt: text('excerpt').notNull().default(''),
+    // Sanitized HTML from the admin editor
+    content: text('content').notNull().default(''),
+    coverImageUrl: text('cover_image_url'),
+    coverImageAlt: text('cover_image_alt').notNull().default(''),
+    status: text('status').$type<PostStatus>().notNull().default('draft'),
+    // A future date schedules the post
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    readingMinutes: integer('reading_minutes').notNull().default(1),
+    // SEO
+    metaTitle: text('meta_title').notNull().default(''),
+    metaDescription: text('meta_description').notNull().default(''),
+    canonicalUrl: text('canonical_url').notNull().default(''),
+    robotsIndex: boolean('robots_index').notNull().default(true),
+    robotsFollow: boolean('robots_follow').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('posts_status_published_at_idx').on(t.status, t.publishedAt)],
+);
+
+export const postCategories = pgTable(
+  'post_categories',
+  {
+    postId: integer('post_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    categoryId: integer('category_id')
+      .notNull()
+      .references(() => blogCategories.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.postId, t.categoryId] })],
+);
+
+// Hand-picked related posts, in display order
+export const postRelated = pgTable(
+  'post_related',
+  {
+    postId: integer('post_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    relatedId: integer('related_id')
+      .notNull()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.postId, t.relatedId] })],
 );
