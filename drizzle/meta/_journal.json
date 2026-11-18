@@ -57,6 +57,13 @@
       "when": 1795004438476,
       "tag": "0007_price_history",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795012502407,
+      "tag": "0008_category_link_products",
+      "breakpoints": true
     }
   ]
 }

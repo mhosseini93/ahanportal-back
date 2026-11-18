@@ -98,6 +98,9 @@ export class UpsertCategoryDto {
   showOnHome!: boolean;
 
   @IsBoolean()
+  linkProducts!: boolean;
+
+  @IsBoolean()
   isActive!: boolean;
 
   // The category's price list, in order; replaces the saved sections

@@ -1,0 +1,1 @@
+ALTER TABLE "categories" ADD COLUMN "link_products" boolean DEFAULT true NOT NULL;

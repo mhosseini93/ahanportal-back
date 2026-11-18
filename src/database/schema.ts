@@ -36,6 +36,8 @@ export const categories = pgTable('categories', {
   imageUrl: text('image_url'),
   position: integer('position').notNull().default(0),
   showOnHome: boolean('show_on_home').notNull().default(true),
+  // Product names in this price list link to their product pages
+  linkProducts: boolean('link_products').notNull().default(true),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),

@@ -33,6 +33,7 @@ const publicCategory = (c: typeof categories.$inferSelect) => ({
   slug: c.slug,
   description: c.description,
   imageUrl: c.imageUrl,
+  linkProducts: c.linkProducts,
   updatedAt: c.updatedAt,
 });
 
@@ -348,6 +349,7 @@ export class CategoriesService {
       imageUrl: dto.imageUrl ?? null,
       position: dto.position,
       showOnHome: dto.showOnHome,
+      linkProducts: dto.linkProducts,
       isActive: dto.isActive,
     };
   }
