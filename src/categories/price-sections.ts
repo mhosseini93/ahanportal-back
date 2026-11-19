@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { and, inArray, notInArray, sql, type SQL } from 'drizzle-orm';
 import { COLUMN_NAME, COLUMN_UNIT, products, type SectionSort } from '../database/schema.js';
 import type { CategorySectionDto } from './dto.js';
+import { listedSql } from './freshness.js';
 
 export const COLUMN_TOKENS = [COLUMN_NAME, COLUMN_UNIT];
 const MAX_FILTER_VALUES = 500;
@@ -94,12 +95,14 @@ export function sectionMatch(section: SectionValues, typeIds: number[]): SQL {
   return and(...conditions)!;
 }
 
-// The section's products as the site will list them
+// The section's products as the site will list them: published, active in the
+// CRM, not left out, and priced in the last LIST_DAYS days
 export function sectionShown(section: SectionValues, typeIds: number[]): SQL {
   const conditions: SQL[] = [
     sectionMatch(section, typeIds),
     sql`${products.status} = 'publish'`,
     sql`${products.crmActive}`,
+    listedSql(),
   ];
   if (section.excludedIds.length) conditions.push(notInArray(products.id, section.excludedIds));
   return and(...conditions)!;

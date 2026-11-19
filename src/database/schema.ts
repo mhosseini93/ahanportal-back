@@ -122,6 +122,8 @@ export const products = pgTable(
     crmActive: boolean('crm_active').notNull().default(true),
     // Rial; filled by the price sync
     price: bigint('price', { mode: 'number' }),
+    // Last time the product got a real price (the same value again counts; an
+    // inquiry, zero or out-of-range price doesn't). Drives src/categories/freshness.ts
     priceUpdatedAt: timestamp('price_updated_at', { withTimezone: true }),
     position: integer('position').notNull().default(0),
     createdAt: createdAt(),

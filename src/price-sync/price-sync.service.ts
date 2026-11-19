@@ -16,6 +16,7 @@ import {
   clean,
   cleanUnit,
   isActive,
+  MIN_PRICE,
   priceOf,
   slugify,
   SOURCE_STATUSES,
@@ -40,6 +41,8 @@ export type SyncResult = {
   status: 'unchanged' | 'synced' | 'skipped';
   read: number;
   priceChanged: number;
+  // Priced again (a real price, same value or not): moves price_updated_at
+  repriced: number;
   activeChanged: number;
   created: number;
   historyAdded: number;
@@ -52,6 +55,8 @@ type SyncState = {
   // Latest source change time already applied (source clock, UTC text)
   watermark: string | null;
   historyBackfilled: boolean;
+  // price_updated_at was rebuilt as "last real price" from the source history
+  pricedAtBackfilled: boolean;
   lastRunAt: string | null;
   lastSuccessAt: string | null;
   lastChangeAt: string | null;
@@ -64,6 +69,7 @@ const EMPTY_STATE: SyncState = {
   fingerprint: null,
   watermark: null,
   historyBackfilled: false,
+  pricedAtBackfilled: false,
   lastRunAt: null,
   lastSuccessAt: null,
   lastChangeAt: null,
@@ -190,6 +196,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       status: 'skipped',
       read: 0,
       priceChanged: 0,
+      repriced: 0,
       activeChanged: 0,
       created: 0,
       historyAdded: 0,
@@ -208,11 +215,14 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       );
       const fingerprint = JSON.stringify(fp);
 
-      if (!full && fingerprint === state.fingerprint && state.historyBackfilled) {
+      if (!full && fingerprint === state.fingerprint && state.historyBackfilled && state.pricedAtBackfilled) {
         result.status = 'unchanged';
       } else {
         result.status = 'synced';
-        const since = full ? null : state.watermark;
+        // One-off: rebuild price_updated_at from the source history, then re-read
+        // every row so current prices set it from lastPriceUpdate
+        if (!state.pricedAtBackfilled) result.repriced += await this.backfillPricedAt();
+        const since = full || !state.pricedAtBackfilled ? null : state.watermark;
         let watermark = state.watermark;
 
         for await (const batch of this.changedRows(since)) {
@@ -225,12 +235,14 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
           result.historyAdded += await this.backfillHistory();
           state.historyBackfilled = true;
         }
+        state.pricedAtBackfilled = true;
 
         state.watermark = watermark;
         state.fingerprint = fingerprint;
       }
 
-      const changed = result.priceChanged + result.activeChanged + result.created > 0;
+      // A repriced product may come back on the price lists
+      const changed = result.priceChanged + result.repriced + result.activeChanged + result.created > 0;
       if (changed) {
         state.lastChangeAt = new Date().toISOString();
         await this.revalidateSite();
@@ -242,7 +254,8 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       state.failures = 0;
       if (result.status === 'synced') {
         this.logger.log(
-          `Synced: read ${result.read}, prices ${result.priceChanged}, active ${result.activeChanged}, ` +
+          `Synced: read ${result.read}, prices ${result.priceChanged}, repriced ${result.repriced}, ` +
+            `active ${result.activeChanged}, ` +
             `new ${result.created}, history ${result.historyAdded} (${result.ms} ms)`,
         );
       }
@@ -299,6 +312,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
           legacyId: products.legacyId,
           crmId: products.crmId,
           price: products.price,
+          pricedAt: products.priceUpdatedAt,
           crmActive: products.crmActive,
         })
         .from(products)
@@ -311,7 +325,14 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       const byLegacy = new Map(existing.filter((p) => p.legacyId !== null).map((p) => [p.legacyId!, p]));
       const byCrm = new Map(existing.filter((p) => p.crmId !== null).map((p) => [p.crmId!, p]));
 
-      type Update = { id: number; price: number | null; active: boolean; at: Date; priceChanged: boolean };
+      type Update = {
+        id: number;
+        price: number | null;
+        active: boolean;
+        at: Date;
+        pricedAt: Date | null;
+        priceChanged: boolean;
+      };
       const updates: Update[] = [];
       const fresh: SourceProduct[] = [];
 
@@ -324,25 +345,35 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
           if (active) fresh.push(row);
           continue;
         }
+        const at = utc(row.lastPriceUpdate) ?? new Date();
         const priceChanged = ours.price !== price;
-        if (priceChanged || ours.crmActive !== active) {
-          updates.push({ id: ours.id, price, active, at: utc(row.lastPriceUpdate) ?? new Date(), priceChanged });
+        // price_updated_at = the last real price; an inquiry, zero or
+        // out-of-range price (price null) leaves it as it was. Never moves back.
+        const pricedAt =
+          price === null || (ours.pricedAt && ours.pricedAt.getTime() >= at.getTime()) ? ours.pricedAt : at;
+        const repriced = pricedAt?.getTime() !== ours.pricedAt?.getTime();
+        if (priceChanged || repriced || ours.crmActive !== active) {
+          updates.push({ id: ours.id, price, active, at, pricedAt, priceChanged });
           if (priceChanged) result.priceChanged++;
+          if (repriced) result.repriced++;
           if (ours.crmActive !== active) result.activeChanged++;
         }
       }
 
       for (const batch of chunks(updates, WRITE_BATCH)) {
         const values = sql.join(
-          batch.map((u) => sql`(${u.id}::int, ${u.price}::bigint, ${u.active}::boolean, ${u.at.toISOString()}::timestamptz, ${u.priceChanged}::boolean)`),
+          batch.map(
+            (u) =>
+              sql`(${u.id}::int, ${u.price}::bigint, ${u.active}::boolean, ${u.pricedAt?.toISOString() ?? null}::timestamptz)`,
+          ),
           sql`, `,
         );
         await tx.execute(sql`
           UPDATE products p SET
             price = v.price,
             crm_active = v.active,
-            price_updated_at = CASE WHEN v.price_changed THEN v.at ELSE p.price_updated_at END
-          FROM (VALUES ${values}) AS v(id, price, active, at, price_changed)
+            price_updated_at = v.priced_at
+          FROM (VALUES ${values}) AS v(id, price, active, priced_at)
           WHERE p.id = v.id`);
         const changedPrices = batch.filter((u) => u.priceChanged);
         if (recordHistory && changedPrices.length) {
@@ -495,6 +526,45 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       WHERE p.price IS NOT NULL AND last.price IS DISTINCT FROM p.price
       ON CONFLICT (product_id, recorded_at) DO NOTHING`);
     return added + (current.rowCount ?? 0);
+  }
+
+  // One-off: price_updated_at used to move only when the price value changed (and
+  // also on a change to «استعلام»). Rebuild it as the last time the source history
+  // got a real price, the same value again included; null when it never did. The
+  // full read after this moves it on to lastPriceUpdate for current real prices.
+  private async backfillPricedAt() {
+    const ours = await this.db
+      .select({ id: products.id, legacyId: products.legacyId })
+      .from(products)
+      .where(isNotNull(products.legacyId));
+    const idByLegacy = new Map(ours.map((p) => [p.legacyId!, p.id]));
+
+    let updated = 0;
+    for (const batch of chunks([...idByLegacy.keys()], HISTORY_PRODUCTS_PER_QUERY)) {
+      const rows = await this.read<{ productId: number; at: string }>(
+        `SELECT "productId", max(date)::text AS at
+         FROM product_price_history
+         WHERE "productId" = ANY($1::int[]) AND "deletedAt" IS NULL AND price >= $2
+         GROUP BY "productId"`,
+        [batch, MIN_PRICE],
+      );
+      const lastPriced = new Map(rows.map((r) => [r.productId, utc(r.at)]));
+      const values = sql.join(
+        batch.map((legacyId) => {
+          const at = lastPriced.get(legacyId) ?? null;
+          return sql`(${idByLegacy.get(legacyId)!}::int, ${at?.toISOString() ?? null}::timestamptz)`;
+        }),
+        sql`, `,
+      );
+      const res = await this.db.execute(sql`
+        UPDATE products p SET price_updated_at = v.at
+        FROM (VALUES ${values}) AS v(id, at)
+        WHERE p.id = v.id AND p.price_updated_at IS DISTINCT FROM v.at`);
+      updated += res.rowCount ?? 0;
+      await sleep(PAUSE_MS);
+    }
+    this.logger.log(`Rebuilt the last real price time of ${updated} products`);
+    return updated;
   }
 
   // Expire the site's cached price pages; they refresh as they are visited

@@ -80,7 +80,9 @@ export function attributesOf(row: SourceProduct): Record<string, string> {
   return attrs;
 }
 
-// Rial price or null («استعلام قیمت» on the site)
+// Rial price, or null when it isn't a real price: inquiry (-1, «استعلام قیمت» on
+// the site), zero, or out of range (other values under MIN_PRICE, e.g. -2 or 18).
+// Only a real price counts as the product being priced (price_updated_at).
 export function priceOf(row: Pick<SourceProduct, 'price'>): number | null {
   const price = row.price === null ? NaN : Number(row.price);
   return Number.isFinite(price) && price >= MIN_PRICE ? price : null;

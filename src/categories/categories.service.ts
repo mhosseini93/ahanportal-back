@@ -14,6 +14,7 @@ import {
   productTypes,
 } from '../database/schema.js';
 import type { CategorySectionDto, UpsertCategoryDto } from './dto.js';
+import { listedSql } from './freshness.js';
 import {
   cleanSection,
   sectionMatch,
@@ -220,6 +221,8 @@ export class CategoriesService {
           crmActive: products.crmActive,
           price: products.price,
           priceUpdatedAt: products.priceUpdatedAt,
+          // Priced recently enough for the price list
+          fresh: sql<boolean>`${listedSql()}`,
           productTypeId: products.productTypeId,
         })
         .from(products)

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, desc, eq, gt, inArray, isNotNull, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lte, ne, sql } from 'drizzle-orm';
 import { DatabaseService } from '../database/database.service.js';
 import {
   attributes,
@@ -10,6 +10,7 @@ import {
   productTypes,
 } from '../database/schema.js';
 import { effectiveAttributes, type TypeInfo } from './price-lists.js';
+import { freshness, indexableSql, listedSql } from './freshness.js';
 import { sectionTypeIds } from './price-sections.js';
 
 const HISTORY_DAYS = 365;
@@ -30,7 +31,8 @@ export class ProductsService {
     return this.database.db;
   }
 
-  // Published products the site lists; inactive (CRM) ones are left out
+  // Published products the site lists and may be indexed: offered by the CRM
+  // and priced in the last NOINDEX_DAYS days
   async sitemap() {
     return this.db
       .select({
@@ -39,8 +41,19 @@ export class ProductsService {
         priced: sql<boolean>`${products.price} IS NOT NULL`,
       })
       .from(products)
-      .where(and(eq(products.status, 'publish'), eq(products.crmActive, true)))
+      .where(and(eq(products.status, 'publish'), eq(products.crmActive, true), indexableSql()))
       .orderBy(desc(products.priceUpdatedAt), asc(products.id));
+  }
+
+  // What the site's proxy needs before rendering a product page: whether it
+  // answers 410 Gone (null = no such published product)
+  async status(slug: string) {
+    const [product] = await this.db
+      .select({ price: products.price, priceUpdatedAt: products.priceUpdatedAt })
+      .from(products)
+      .where(and(eq(products.slug, slug), eq(products.status, 'publish')))
+      .limit(1);
+    return product ? { gone: freshness(product).gone } : null;
   }
 
   // A published product; one the CRM deactivated still answers (the page says
@@ -89,8 +102,9 @@ export class ProductsService {
         value: product.attributes[key],
       }));
 
+    const fresh = freshness(product);
     const [priceLists, history, similar] = await Promise.all([
-      this.listsShowing(product, types),
+      fresh.listed ? this.listsShowing(product, types) : Promise.resolve([]),
       this.history(product.id),
       this.similar(product),
     ]);
@@ -108,6 +122,8 @@ export class ProductsService {
       priceUpdatedAt: product.priceUpdatedAt,
       updatedAt: product.updatedAt,
       active: product.crmActive,
+      // listed: on the price lists; indexable: the page may be indexed; gone: 410
+      ...fresh,
       change: product.price === last?.price ? changePercent(last?.price, previous?.price) : null,
       type: typePath[typePath.length - 1] ?? null,
       typePath,
@@ -167,7 +183,7 @@ export class ProductsService {
     return [...before, ...recent];
   }
 
-  // Same type, listed and priced, closest price first; with each one's last change
+  // Same type, on the price lists (priced lately), closest price first; with each one's last change
   private async similar(product: typeof products.$inferSelect) {
     const rows = await this.db
       .select({
@@ -185,7 +201,7 @@ export class ProductsService {
           ne(products.id, product.id),
           eq(products.status, 'publish'),
           eq(products.crmActive, true),
-          isNotNull(products.price),
+          listedSql(),
         ),
       )
       .orderBy(
