@@ -11,10 +11,12 @@ import {
 } from '../database/schema.js';
 import { effectiveAttributes, type TypeInfo } from './price-lists.js';
 import { freshness, indexableSql, listedSql } from './freshness.js';
+import { analyzePrice, PEER_VARYING_KEYS } from './price-analysis.js';
 import { sectionTypeIds } from './price-sections.js';
 
 const HISTORY_DAYS = 365;
 const SIMILAR_COUNT = 6;
+const PEER_COUNT = 8;
 
 // Percent change of the latest price against the previous different one
 function changePercent(latest: number | null | undefined, previous: number | null | undefined) {
@@ -103,11 +105,18 @@ export class ProductsService {
       }));
 
     const fresh = freshness(product);
-    const [priceLists, history, similar] = await Promise.all([
+    const [priceLists, history, similar, peers] = await Promise.all([
       fresh.listed ? this.listsShowing(product, types) : Promise.resolve([]),
       this.history(product.id),
       this.similar(product),
+      fresh.listed && product.crmActive ? this.peers(product) : Promise.resolve(null),
     ]);
+    const asOf = new Date();
+    // Only for a current price: an old one would mislead
+    const analysis =
+      fresh.listed && product.crmActive && product.price !== null
+        ? analyzePrice(product.price, history, asOf)
+        : null;
     const priced = history.filter((h): h is { date: Date; price: number } => h.price !== null);
     const last = priced[priced.length - 1];
     const previous = [...priced].reverse().find((h) => h.price !== last?.price);
@@ -131,8 +140,69 @@ export class ProductsService {
       priceLists,
       history: priced,
       similar,
+      analysis,
+      peers,
       // When this answer was built: the latest price holds until then (chart end)
-      asOf: new Date(),
+      asOf,
+    };
+  }
+
+  // The same item from other makers or delivery points: same type and unit, the
+  // same values for every attribute but PEER_VARYING_KEYS, on the price lists.
+  // Cheapest first, with the average over all of them (this product included).
+  private async peers(product: typeof products.$inferSelect) {
+    if (product.price === null) return null;
+    const keys = Object.keys(product.attributes).filter(
+      (k) => product.attributes[k] && !PEER_VARYING_KEYS.includes(k),
+    );
+    if (!keys.length) return null;
+
+    const match = and(
+      eq(products.productTypeId, product.productTypeId),
+      eq(products.unit, product.unit),
+      eq(products.status, 'publish'),
+      eq(products.crmActive, true),
+      listedSql(),
+      ...keys.map((k) => sql`${products.attributes} ->> ${k} = ${product.attributes[k]}`),
+    );
+    const [rows, [stats]] = await Promise.all([
+      this.db
+        .select({
+          id: products.id,
+          name: products.name,
+          slug: products.slug,
+          brand: sql<string | null>`${products.attributes} ->> 'brand'`,
+          stock: sql<string | null>`${products.attributes} ->> 'stock'`,
+          price: products.price,
+        })
+        .from(products)
+        .where(and(match, ne(products.id, product.id)))
+        .orderBy(asc(products.price), asc(products.id))
+        .limit(PEER_COUNT),
+      this.db
+        .select({
+          count: sql<number>`count(*)::int`,
+          average: sql<number>`round(avg(${products.price}))::bigint`,
+          min: sql<number>`min(${products.price})`,
+          max: sql<number>`max(${products.price})`,
+        })
+        .from(products)
+        .where(match),
+    ]);
+    if (!rows.length) return null;
+    const average = Number(stats.average);
+    const pct = (a: number, b: number) => Math.round(((a - b) / b) * 1000) / 10;
+    return {
+      // How many products are compared, this one included
+      count: stats.count,
+      average,
+      min: Number(stats.min),
+      max: Number(stats.max),
+      // This product against the average (percent; negative = cheaper)
+      diff: pct(product.price, average),
+      // Attributes the comparison holds fixed, for the heading
+      keys,
+      items: rows.map((r) => ({ ...r, price: r.price!, diff: pct(r.price!, product.price!) })),
     };
   }
 
