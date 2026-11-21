@@ -71,6 +71,20 @@
       "when": 1795014956155,
       "tag": "0009_price_list_filters_and_sort",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795245751395,
+      "tag": "0010_category_tree",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795247115327,
+      "tag": "0011_drop_category_tree",
+      "breakpoints": true
     }
   ]
 }
