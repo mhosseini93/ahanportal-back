@@ -1,16 +1,27 @@
 import { Injectable } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { sanitizeContent } from '../content.js';
 import { DatabaseService } from '../database/database.service.js';
-import { settings } from '../database/schema.js';
-import type { FooterSettingsDto, HomeSeoDto } from './settings.dto.js';
+import { categories, settings } from '../database/schema.js';
+import { cleanMenu, type MenuItem } from './header-menu.js';
+import type {
+  FooterSettingsDto,
+  HeaderMenuDto,
+  HomeSeoDto,
+} from './settings.dto.js';
 
 export type FooterSettings = {
   columns: { title: string; links: { label: string; href: string }[] }[];
   updatedAt: string | null;
 };
 
-export type HomeSeo = { title: string; content: string; updatedAt: string | null };
+export type HeaderMenu = { items: MenuItem[]; updatedAt: string | null };
+
+export type HomeSeo = {
+  title: string;
+  content: string;
+  updatedAt: string | null;
+};
 
 // Used until an admin saves the footer for the first time
 const DEFAULT_FOOTER: FooterSettings['columns'] = [
@@ -39,6 +50,7 @@ const DEFAULT_HOME_SEO: Omit<HomeSeo, 'updatedAt'> = {
 };
 
 const FOOTER_KEY = 'footer';
+const HEADER_MENU_KEY = 'header-menu';
 const HOME_SEO_KEY = 'home-seo';
 
 @Injectable()
@@ -51,14 +63,19 @@ export class SettingsService {
       .from(settings)
       .where(eq(settings.key, key))
       .limit(1);
-    return row ? { value: row.value as T, updatedAt: row.updatedAt.toISOString() } : null;
+    return row
+      ? { value: row.value as T, updatedAt: row.updatedAt.toISOString() }
+      : null;
   }
 
   private async write(key: string, value: unknown) {
     await this.database.db
       .insert(settings)
       .values({ key, value })
-      .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: sql`now()` } });
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value, updatedAt: sql`now()` },
+      });
   }
 
   async getFooter(): Promise<FooterSettings> {
@@ -77,14 +94,71 @@ export class SettingsService {
     return this.getFooter();
   }
 
+  // Until an admin saves the menu: the old fixed header links, with every
+  // active price list under «قیمت روز آهن» as a starting point
+  private async defaultHeaderMenu(): Promise<MenuItem[]> {
+    const lists = await this.database.db
+      .select({ name: categories.name, slug: categories.slug })
+      .from(categories)
+      .where(eq(categories.isActive, true))
+      .orderBy(asc(categories.position), asc(categories.id));
+    const link = (
+      label: string,
+      href: string,
+      children: MenuItem[] = [],
+    ): MenuItem => ({
+      label,
+      href,
+      imageUrl: null,
+      children,
+    });
+    return [
+      link(
+        'قیمت روز آهن',
+        '/prices',
+        lists.map((l) => link(l.name, `/prices/${l.slug}`)),
+      ),
+      link('محصولات', '/#categories'),
+      link('مقالات', '/blog'),
+      link('مراحل خرید', '/#steps'),
+      link('سوالات متداول', '/#faq'),
+      link('تماس با ما', '/#contact'),
+    ];
+  }
+
+  async getHeaderMenu(): Promise<HeaderMenu> {
+    const row = await this.read<{ items: MenuItem[] }>(HEADER_MENU_KEY);
+    if (!row) return { items: await this.defaultHeaderMenu(), updatedAt: null };
+    return { items: row.value.items, updatedAt: row.updatedAt };
+  }
+
+  async updateHeaderMenu(dto: HeaderMenuDto): Promise<HeaderMenu> {
+    await this.write(HEADER_MENU_KEY, { items: cleanMenu(dto.items) });
+    return this.getHeaderMenu();
+  }
+
+  async resetHeaderMenu(): Promise<HeaderMenu> {
+    await this.database.db
+      .delete(settings)
+      .where(eq(settings.key, HEADER_MENU_KEY));
+    return this.getHeaderMenu();
+  }
+
   async getHomeSeo(): Promise<HomeSeo> {
     const row = await this.read<Omit<HomeSeo, 'updatedAt'>>(HOME_SEO_KEY);
     if (!row) return { ...DEFAULT_HOME_SEO, updatedAt: null };
-    return { title: row.value.title, content: row.value.content, updatedAt: row.updatedAt };
+    return {
+      title: row.value.title,
+      content: row.value.content,
+      updatedAt: row.updatedAt,
+    };
   }
 
   async updateHomeSeo(dto: HomeSeoDto): Promise<HomeSeo> {
-    await this.write(HOME_SEO_KEY, { title: dto.title, content: sanitizeContent(dto.content) });
+    await this.write(HOME_SEO_KEY, {
+      title: dto.title,
+      content: sanitizeContent(dto.content),
+    });
     return this.getHomeSeo();
   }
 }

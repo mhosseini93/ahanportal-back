@@ -64,3 +64,9 @@ export class HomeSeoDto {
   @MaxLength(100_000, { message: 'متن خیلی طولانی است' })
   content!: string;
 }
+
+// The header menu tree; checked item by item in header-menu.ts (it's recursive)
+export class HeaderMenuDto {
+  @IsArray({ message: 'ساختار منو معتبر نیست' })
+  items!: unknown[];
+}
