@@ -34,12 +34,16 @@ export class ProductsService {
   }
 
   // Published products the site lists and may be indexed: offered by the CRM
-  // and priced in the last NOINDEX_DAYS days
+  // and priced in the last NOINDEX_DAYS days. updatedAt (the sitemap lastmod) is
+  // the last real change: a panel edit or a price change (price_history holds one
+  // row per change), not a reprice with the same value
   async sitemap() {
     return this.db
       .select({
         slug: products.slug,
-        updatedAt: sql<string>`greatest(${products.updatedAt}, ${products.priceUpdatedAt})`,
+        updatedAt: sql<Date>`greatest(${products.updatedAt}, (
+          SELECT max(${priceHistory.recordedAt}) FROM ${priceHistory}
+          WHERE ${priceHistory.productId} = ${products.id}))`.mapWith(products.updatedAt),
         priced: sql<boolean>`${products.price} IS NOT NULL`,
       })
       .from(products)

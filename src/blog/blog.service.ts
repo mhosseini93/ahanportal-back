@@ -216,9 +216,17 @@ export class BlogService {
       .where(and(isPublic(), eq(posts.robotsIndex, true), eq(posts.canonicalUrl, '')))
       .orderBy(desc(posts.publishedAt));
 
+    // A category page changes when one of its public posts does
+    const latest = await this.db
+      .select({ categoryId: postCategories.categoryId, updatedAt: sql<Date>`max(${posts.updatedAt})`.mapWith(posts.updatedAt) })
+      .from(postCategories)
+      .innerJoin(posts, eq(posts.id, postCategories.postId))
+      .where(isPublic())
+      .groupBy(postCategories.categoryId);
+    const latestById = new Map(latest.map((l) => [l.categoryId, l.updatedAt]));
     const categoryRows = (await this.listPublicCategories())
       .filter((c) => c.postCount > 0)
-      .map((c) => ({ slug: c.slug }));
+      .map((c) => ({ slug: c.slug, updatedAt: latestById.get(c.id) ?? null }));
 
     return { posts: postRows, categories: categoryRows };
   }
