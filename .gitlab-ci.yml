@@ -1,0 +1,7 @@
+# read document https://git.ahanoffline.ir/devops/ci-templates
+include:
+  - project: "devops/ci-templates"
+    ref: "main"
+    file: "cloud-01.runner.yml"
+variables:
+  DOCKERFILE_PATH: "Dockerfile"

@@ -1,0 +1,10 @@
+node_modules
+dist
+uploads
+.git
+.env*
+*.tsbuildinfo
+*.log
+product-slugs-backup-*.json
+Dockerfile
+.dockerignore
