@@ -219,9 +219,21 @@ try {
   }
   console.log(`Product types: ${typeIds.size}`);
 
-  const usedSlugs = new Set(
-    (await client.query('SELECT slug FROM products WHERE legacy_id IS NULL')).rows.map((r) => r.slug),
-  );
+  // Product slugs are locked once created (products_slug_locked trigger): rows
+  // already imported keep theirs; new ones get name + CRM id (else code), the
+  // same rule as src/catalog/product-slug.ts
+  const { rows: slugRows } = await client.query('SELECT legacy_id, slug FROM products');
+  const usedSlugs = new Set(slugRows.map((r) => r.slug));
+  const slugByLegacy = new Map(slugRows.filter((r) => r.legacy_id !== null).map((r) => [Number(r.legacy_id), r.slug]));
+  const productSlug = (p, name) => {
+    const existing = slugByLegacy.get(Number(p.id));
+    if (existing) return existing;
+    const base = slugify(`${name} ${clean(p.crmId) ?? clean(p.code) ?? ''}`) || `item-${p.id}`;
+    let slug = base;
+    for (let n = 2; usedSlugs.has(slug); n++) slug = `${base}-${n}`;
+    usedSlugs.add(slug);
+    return slug;
+  };
   const usedCrm = new Set(
     (await client.query('SELECT crm_id FROM products WHERE legacy_id IS NULL AND crm_id IS NOT NULL')).rows.map((r) => r.crm_id),
   );
@@ -244,7 +256,7 @@ try {
         uniqueCrm(usedCrm, p.crmId),
         clean(p.code),
         name,
-        uniqueSlug(usedSlugs, p.slug, `${name} ${p.code ?? ''}`, p.id),
+        productSlug(p, name),
         JSON.stringify(attrs),
         cleanUnit(p.unit),
         p.status,
@@ -258,7 +270,7 @@ try {
        VALUES ${values.join(', ')}
        ON CONFLICT (legacy_id) DO UPDATE SET
          product_type_id = EXCLUDED.product_type_id, crm_id = EXCLUDED.crm_id, code = EXCLUDED.code,
-         name = EXCLUDED.name, slug = EXCLUDED.slug, attributes = EXCLUDED.attributes, unit = EXCLUDED.unit,
+         name = EXCLUDED.name, attributes = EXCLUDED.attributes, unit = EXCLUDED.unit,
          status = EXCLUDED.status, position = EXCLUDED.position, updated_at = now()`,
       params,
     );

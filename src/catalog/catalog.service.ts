@@ -20,6 +20,8 @@ import type {
   UpsertProductTypeDto,
 } from './dto.js';
 import { buildName, effectiveNameParts, TYPE_TOKEN } from './naming.js';
+import { productSlugBase, uniqueSlug } from './product-slug.js';
+import { createProductPages } from '../categories/product-pages.js';
 
 const PAGE_SIZE = 50;
 
@@ -351,10 +353,20 @@ export class CatalogService {
     return row;
   }
 
+  // The slug is built here once from the name and CRM id (else code); updates never touch it
   async createProduct(dto: UpsertProductDto) {
     const values = await this.productValues(dto);
+    const base = productSlugBase(values.name, values.crmId, values.code, 'product');
+    const taken = await this.db
+      .select({ slug: products.slug })
+      .from(products)
+      .where(or(eq(products.slug, base), sql`${products.slug} LIKE ${`${base}-%`}`));
+    const slug = uniqueSlug(base, new Set(taken.map((t) => t.slug)));
     try {
-      const [row] = await this.db.insert(products).values(values).returning();
+      const [row] = await this.db
+        .insert(products)
+        .values({ ...values, slug })
+        .returning();
       return row;
     } catch (error) {
       rethrow(error);
@@ -370,6 +382,11 @@ export class CatalogService {
         .where(eq(products.id, id))
         .returning();
       if (!row) throw new NotFoundException('کالا پیدا نشد');
+      // Published, or moved onto a linked price list: it may get its page now
+      if ((await createProductPages(this.db)) > 0) {
+        const [fresh] = await this.db.select().from(products).where(eq(products.id, id)).limit(1);
+        return fresh;
+      }
       return row;
     } catch (error) {
       rethrow(error);
@@ -407,7 +424,6 @@ export class CatalogService {
     return {
       name: built ?? dto.name,
       nameLocked: dto.nameLocked,
-      slug: dto.slug,
       productTypeId: dto.productTypeId,
       code: dto.code ?? null,
       crmId: dto.crmId ?? null,

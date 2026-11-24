@@ -1,0 +1,1 @@
+ALTER TABLE "products" ADD COLUMN "page_created_at" timestamp with time zone;

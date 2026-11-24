@@ -14,7 +14,8 @@ import {
   productTypes,
 } from '../database/schema.js';
 import type { CategorySectionDto, UpsertCategoryDto } from './dto.js';
-import { listedSql } from './freshness.js';
+import { hasPageSql, listedSql } from './freshness.js';
+import { createProductPages } from './product-pages.js';
 import {
   cleanSection,
   sectionMatch,
@@ -118,6 +119,8 @@ export class CategoriesService {
         }
         return created;
       });
+      // A new linked price list may give recently priced products their page
+      await createProductPages(this.db);
       return { ...row, sections: await this.sections(row.id) };
     } catch (error) {
       this.rethrow(error);
@@ -144,6 +147,7 @@ export class CategoriesService {
         }
         return updated;
       });
+      await createProductPages(this.db);
       return { ...row, sections: await this.sections(id) };
     } catch (error) {
       this.rethrow(error);
@@ -358,6 +362,7 @@ export class CategoriesService {
             unit: products.unit,
             price: products.price,
             priceUpdatedAt: products.priceUpdatedAt,
+            hasPage: sql<boolean>`${hasPageSql()}`,
           })
           .from(products)
           .where(sectionShown(section, ids));

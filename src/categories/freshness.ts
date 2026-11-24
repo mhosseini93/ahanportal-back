@@ -8,20 +8,26 @@ import { products } from '../database/schema.js';
 
 // Price lists show only products priced within this many days
 export const LIST_DAYS = 14;
-// Product pages not priced within this many days are noindex
+// A product gets its page only when it is on a linked price list and was priced
+// within this many days (src/categories/product-pages.ts)
+export const PAGE_DAYS = 7;
+// A product page not priced within this many days is noindex
 export const NOINDEX_DAYS = 30;
-// ...and answer 410 Gone after this many; never priced = gone
-export const GONE_DAYS = 90;
+// ...and answers 410 Gone this many days after it went noindex
+export const GONE_AFTER_NOINDEX_DAYS = 90;
+export const GONE_DAYS = NOINDEX_DAYS + GONE_AFTER_NOINDEX_DAYS;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const pricedWithin = (days: number) =>
+export const pricedWithin = (days: number) =>
   sql`${products.priceUpdatedAt} > now() - make_interval(days => ${days})`;
 
 // On the price lists: has a price now, and it was set in the last LIST_DAYS
 export const listedSql = () => sql`(${products.price} IS NOT NULL AND ${pricedWithin(LIST_DAYS)})`;
+// The product has a page on the site (it may still be noindex or gone)
+export const hasPageSql = () => sql`${products.pageCreatedAt} IS NOT NULL`;
 // Product page may be indexed
-export const indexableSql = () => pricedWithin(NOINDEX_DAYS);
+export const indexableSql = () => sql`(${hasPageSql()} AND ${pricedWithin(NOINDEX_DAYS)})`;
 
 export type Freshness = { listed: boolean; indexable: boolean; gone: boolean };
 

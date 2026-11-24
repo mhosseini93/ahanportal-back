@@ -8,6 +8,8 @@ import { ConfigService } from '@nestjs/config';
 import { eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { buildName, effectiveNameParts } from '../catalog/naming.js';
+import { productSlugBase, uniqueSlug } from '../catalog/product-slug.js';
+import { createProductPages } from '../categories/product-pages.js';
 import { DatabaseService } from '../database/database.service.js';
 import { products, productTypes, settings } from '../database/schema.js';
 import {
@@ -18,7 +20,6 @@ import {
   isActive,
   MIN_PRICE,
   priceOf,
-  slugify,
   SOURCE_STATUSES,
   utc,
   type SourceProduct,
@@ -45,6 +46,8 @@ export type SyncResult = {
   repriced: number;
   activeChanged: number;
   created: number;
+  // Products that got their site page (src/categories/product-pages.ts)
+  pagesCreated: number;
   historyAdded: number;
   ms: number;
 };
@@ -199,6 +202,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       repriced: 0,
       activeChanged: 0,
       created: 0,
+      pagesCreated: 0,
       historyAdded: 0,
       ms: 0,
     };
@@ -241,8 +245,12 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
         state.fingerprint = fingerprint;
       }
 
+      // Products newly on a linked price list and priced lately get their page
+      result.pagesCreated = await createProductPages(this.db);
+
       // A repriced product may come back on the price lists
-      const changed = result.priceChanged + result.repriced + result.activeChanged + result.created > 0;
+      const changed =
+        result.priceChanged + result.repriced + result.activeChanged + result.created + result.pagesCreated > 0;
       if (changed) {
         state.lastChangeAt = new Date().toISOString();
         await this.revalidateSite();
@@ -256,7 +264,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
         this.logger.log(
           `Synced: read ${result.read}, prices ${result.priceChanged}, repriced ${result.repriced}, ` +
             `active ${result.activeChanged}, ` +
-            `new ${result.created}, history ${result.historyAdded} (${result.ms} ms)`,
+            `new ${result.created}, pages ${result.pagesCreated}, history ${result.historyAdded} (${result.ms} ms)`,
         );
       }
       return result;
@@ -446,12 +454,11 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       const attributes = attributesOf(r);
       const sourceName = clean(r.name)!;
       const built = buildName(effectiveNameParts(typeById, type.id), type.name, attributes);
-      let slug = slugify(r.slug) || slugify(`${sourceName} ${r.code ?? ''}`) || `item-${r.id}`;
-      if (used.has(slug)) slug = `${slug}-${r.id}`;
-      used.add(slug);
       const crm = clean(r.crmId);
       const crmId = crm && !usedCrm.has(crm) ? crm : null;
       if (crmId) usedCrm.add(crmId);
+      // Same rule as the panel: name + CRM id (else code), locked from now on
+      const slug = uniqueSlug(productSlugBase(built ?? sourceName, crm, clean(r.code), `item-${r.id}`), used);
       const price = priceOf(r);
       return {
         legacyId: r.id,

@@ -10,7 +10,7 @@ import {
   productTypes,
 } from '../database/schema.js';
 import { effectiveAttributes, type TypeInfo } from './price-lists.js';
-import { freshness, indexableSql, listedSql } from './freshness.js';
+import { freshness, hasPageSql, indexableSql, listedSql } from './freshness.js';
 import { analyzePrice, PEER_VARYING_KEYS } from './price-analysis.js';
 import { sectionTypeIds } from './price-sections.js';
 
@@ -48,23 +48,23 @@ export class ProductsService {
   }
 
   // What the site's proxy needs before rendering a product page: whether it
-  // answers 410 Gone (null = no such published product)
+  // answers 410 Gone (null = no such published product with a page)
   async status(slug: string) {
     const [product] = await this.db
       .select({ price: products.price, priceUpdatedAt: products.priceUpdatedAt })
       .from(products)
-      .where(and(eq(products.slug, slug), eq(products.status, 'publish')))
+      .where(and(eq(products.slug, slug), eq(products.status, 'publish'), hasPageSql()))
       .limit(1);
     return product ? { gone: freshness(product).gone } : null;
   }
 
-  // A published product; one the CRM deactivated still answers (the page says
-  // it isn't offered now) so its URL doesn't break
+  // A published product that has a page (product-pages.ts); one the CRM
+  // deactivated still answers (the page says it isn't offered now) so its URL doesn't break
   async publicProduct(slug: string) {
     const [product] = await this.db
       .select()
       .from(products)
-      .where(and(eq(products.slug, slug), eq(products.status, 'publish')))
+      .where(and(eq(products.slug, slug), eq(products.status, 'publish'), hasPageSql()))
       .limit(1);
     if (!product) throw new NotFoundException('محصول پیدا نشد');
 
@@ -174,6 +174,8 @@ export class ProductsService {
           brand: sql<string | null>`${products.attributes} ->> 'brand'`,
           stock: sql<string | null>`${products.attributes} ->> 'stock'`,
           price: products.price,
+          // Linked on the site only when the product has a page
+          hasPage: sql<boolean>`${hasPageSql()}`,
         })
         .from(products)
         .where(and(match, ne(products.id, product.id)))
@@ -272,6 +274,8 @@ export class ProductsService {
           eq(products.status, 'publish'),
           eq(products.crmActive, true),
           listedSql(),
+          // Only products that have a page: each one links to it
+          hasPageSql(),
         ),
       )
       .orderBy(

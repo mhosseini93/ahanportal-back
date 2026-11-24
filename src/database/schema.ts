@@ -125,6 +125,9 @@ export const products = pgTable(
     // Last time the product got a real price (the same value again counts; an
     // inquiry, zero or out-of-range price doesn't). Drives src/categories/freshness.ts
     priceUpdatedAt: timestamp('price_updated_at', { withTimezone: true }),
+    // When the product got its page on the site (null = no page yet). Set once by
+    // src/categories/product-pages.ts; after that freshness.ts decides noindex/410
+    pageCreatedAt: timestamp('page_created_at', { withTimezone: true }),
     position: integer('position').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

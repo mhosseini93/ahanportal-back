@@ -85,6 +85,20 @@
       "when": 1795247115327,
       "tag": "0011_drop_category_tree",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795504766856,
+      "tag": "0012_product_slug_lock",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1795520521803,
+      "tag": "0013_product_page_created",
+      "breakpoints": true
     }
   ]
 }

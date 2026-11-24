@@ -9,6 +9,8 @@ export type PublicRow = {
   id: number;
   name: string;
   slug: string;
+  // The product has a page (product-pages.ts); the site links only these
+  hasPage: boolean;
   // Only the attribute values the site needs (columns, split and filters)
   values: Record<string, string>;
   unit: string;

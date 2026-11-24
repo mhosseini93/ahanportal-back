@@ -129,11 +129,7 @@ export class UpsertProductDto {
   @IsBoolean()
   nameLocked!: boolean;
 
-  @Transform(trim)
-  @IsString()
-  @Matches(SLUG_PATTERN, { message: SLUG_MESSAGE })
-  @MaxLength(180, { message: 'نامک حداکثر ۱۸۰ کاراکتر است' })
-  slug!: string;
+  // No slug here: it is built on create from the name and CRM id, then locked
 
   @IsInt({ message: 'نوع کالا را انتخاب کنید' })
   productTypeId!: number;
