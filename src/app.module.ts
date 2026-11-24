@@ -9,12 +9,14 @@ import { CategoriesModule } from './categories/categories.module.js';
 import { PriceSyncModule } from './price-sync/price-sync.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { SettingsModule } from './settings/settings.module.js';
+import { StorageModule } from './storage/storage.module.js';
 import { UploadsController } from './uploads/uploads.controller.js';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     DatabaseModule,
+    StorageModule,
     AuthModule,
     SettingsModule,
     CategoriesModule,
