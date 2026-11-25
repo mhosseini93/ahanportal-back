@@ -51,6 +51,75 @@ export class ProductsService {
       .orderBy(desc(products.priceUpdatedAt), asc(products.id));
   }
 
+  // Published products by CRM id for the site's shortcodes. price is null unless
+  // the product is on the price lists (offered and priced lately), like the site
+  // shows it everywhere else. previousPrice = the price before the last change
+  // (price_history holds one row per change), null when there is none.
+  async shortcodes(codes: string[]) {
+    if (!codes.length) return [];
+    const rows = await this.db
+      .select({
+        id: products.id,
+        code: products.crmId,
+        name: products.name,
+        slug: products.slug,
+        unit: products.unit,
+        price: products.price,
+        priceUpdatedAt: products.priceUpdatedAt,
+        crmActive: products.crmActive,
+        hasPage: sql<boolean>`${hasPageSql()}`,
+      })
+      .from(products)
+      .where(and(inArray(products.crmId, codes), eq(products.status, 'publish')));
+    if (!rows.length) return [];
+
+    const recent = await this.db.execute<{ product_id: number; price: string | null; rn: number }>(sql`
+      SELECT product_id, price::text AS price, rn FROM (
+        SELECT product_id, price, row_number() OVER (PARTITION BY product_id ORDER BY recorded_at DESC) AS rn
+        FROM ${priceHistory}
+        WHERE ${inArray(
+          priceHistory.productId,
+          rows.map((r) => r.id),
+        )}
+      ) h WHERE rn <= 2`);
+    const latest = new Map<number, number | null>();
+    const previous = new Map<number, number | null>();
+    for (const r of recent.rows) {
+      const price = r.price === null ? null : Number(r.price);
+      (Number(r.rn) === 1 ? latest : previous).set(r.product_id, price);
+    }
+
+    return rows.map(({ id, crmActive, ...r }) => {
+      const current = crmActive && freshness(r).listed ? r.price : null;
+      return {
+        ...r,
+        price: current,
+        // Only when the latest history row is the current price (as on the product page)
+        previousPrice: current !== null && latest.get(id) === current ? (previous.get(id) ?? null) : null,
+      };
+    });
+  }
+
+  // The CRM id of the most recently priced product on the price lists that has
+  // a page (so every product shortcode shows something); null when there is none
+  async shortcodeSample() {
+    const [row] = await this.db
+      .select({ code: products.crmId })
+      .from(products)
+      .where(
+        and(
+          eq(products.status, 'publish'),
+          eq(products.crmActive, true),
+          listedSql(),
+          hasPageSql(),
+          sql`${products.crmId} ~ '^[0-9]+$'`,
+        ),
+      )
+      .orderBy(desc(products.priceUpdatedAt), asc(products.id))
+      .limit(1);
+    return { code: row?.code ?? null };
+  }
+
   // What the site's proxy needs before rendering a product page: whether it
   // answers 410 Gone (null = no such published product with a page)
   async status(slug: string) {
