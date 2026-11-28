@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, desc, eq, gt, inArray, lte, ne, sql } from 'drizzle-orm';
+import { readNarrative } from '../analysis/narrative.js';
 import { DatabaseService } from '../database/database.service.js';
 import {
   attributes,
@@ -178,11 +179,12 @@ export class ProductsService {
       }));
 
     const fresh = freshness(product);
-    const [priceLists, history, similar, peers] = await Promise.all([
+    const [priceLists, history, similar, peers, narrative] = await Promise.all([
       fresh.listed ? this.listsShowing(product, types) : Promise.resolve([]),
       this.history(product.id),
       this.similar(product),
       fresh.listed && product.crmActive ? this.peers(product) : Promise.resolve(null),
+      readNarrative(this.db, 'product', product.id),
     ]);
     const asOf = new Date();
     // Only for a current price: an old one would mislead
@@ -215,9 +217,28 @@ export class ProductsService {
       similar,
       analysis,
       peers,
+      // Automatic analysis text with {{placeholders}} (src/analysis/), only with
+      // analysis (the site fills it from these numbers); null = none
+      narrative: analysis ? narrative : null,
       // When this answer was built: the latest price holds until then (chart end)
       asOf,
     };
+  }
+
+  // What the analysis engine (src/analysis/) writes from. null = no published
+  // product with a page; analysis is null unless the price is current (as on the page)
+  async analysisFacts(id: number) {
+    const [product] = await this.db
+      .select()
+      .from(products)
+      .where(and(eq(products.id, id), eq(products.status, 'publish'), hasPageSql()))
+      .limit(1);
+    if (!product) return null;
+    const info = { id: product.id, name: product.name, slug: product.slug, unit: product.unit, price: product.price };
+    const current = freshness(product).listed && product.crmActive && product.price !== null;
+    if (!current) return { product: info, analysis: null, peers: null, history: [] };
+    const [history, peers] = await Promise.all([this.history(product.id), this.peers(product)]);
+    return { product: info, analysis: analyzePrice(product.price!, history, new Date()), peers, history };
   }
 
   // The same item from other makers or delivery points: same type and unit, the
@@ -260,6 +281,7 @@ export class ProductsService {
           average: sql<number>`round(avg(${products.price}))::bigint`,
           min: sql<number>`min(${products.price})`,
           max: sql<number>`max(${products.price})`,
+          cheaper: sql<number>`(count(*) FILTER (WHERE ${products.price} < ${product.price}))::int`,
         })
         .from(products)
         .where(match),
@@ -275,6 +297,8 @@ export class ProductsService {
       max: Number(stats.max),
       // This product against the average (percent; negative = cheaper)
       diff: pct(product.price, average),
+      // 1 = cheapest of the group (a tie shares the better rank)
+      rank: stats.cheaper + 1,
       // Attributes the comparison holds fixed, for the heading
       keys,
       items: rows.map((r) => ({ ...r, price: r.price!, diff: pct(r.price!, product.price!) })),

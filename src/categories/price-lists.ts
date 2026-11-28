@@ -79,6 +79,25 @@ const tehranDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' });
 export const isTehranToday = (date: Date | null, now = new Date()) =>
   !!date && tehranDay.format(date) === tehranDay.format(now);
 
+const tehranClock = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Tehran',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+
+// Midnight that started the current calendar day in Tehran
+export function tehranDayStart(now = new Date()): Date {
+  const p = Object.fromEntries(tehranClock.formatToParts(now).map((x) => [x.type, Number(x.value)]));
+  const wall = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  const offset = wall - Math.floor(now.getTime() / 1000) * 1000;
+  return new Date(Date.UTC(p.year, p.month - 1, p.day) - offset);
+}
+
 // Labels of the attributes a price list filters on (by the global attribute
 // name); unknown keys are skipped
 export function filterColumns(keys: string[], attributes: Map<string, AttributeInfo>): PublicColumn[] {

@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
+import { AnalysisService } from '../analysis/analysis.service.js';
 import { buildName, effectiveNameParts } from '../catalog/naming.js';
 import { productSlugBase, uniqueSlug } from '../catalog/product-slug.js';
 import { createProductPages } from '../categories/product-pages.js';
@@ -49,6 +50,8 @@ export type SyncResult = {
   // Products that got their site page (src/categories/product-pages.ts)
   pagesCreated: number;
   historyAdded: number;
+  // Analysis texts written after the run (src/analysis/)
+  analysesWritten: number;
   ms: number;
 };
 
@@ -102,6 +105,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
   constructor(
     private readonly database: DatabaseService,
     private readonly config: ConfigService,
+    private readonly analysis: AnalysisService,
   ) {
     this.intervalMinutes = Math.max(1, Number(config.get('PRICE_SYNC_INTERVAL_MINUTES') ?? 10) || 10);
   }
@@ -204,6 +208,7 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       created: 0,
       pagesCreated: 0,
       historyAdded: 0,
+      analysesWritten: 0,
       ms: 0,
     };
     if (!this.enabled || this.running) return result;
@@ -248,9 +253,24 @@ export class PriceSyncService implements OnApplicationBootstrap, OnModuleDestroy
       // Products newly on a linked price list and priced lately get their page
       result.pagesCreated = await createProductPages(this.db);
 
+      // Analysis texts of the chosen pages, also on a quiet run (a category is
+      // written once a day when enough of it was priced). Its failure isn't the
+      // sync's: it must not trigger the source backoff.
+      try {
+        result.analysesWritten = await this.analysis.reconcile();
+      } catch (error) {
+        this.logger.warn(`Analysis run failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
       // A repriced product may come back on the price lists
       const changed =
-        result.priceChanged + result.repriced + result.activeChanged + result.created + result.pagesCreated > 0;
+        result.priceChanged +
+          result.repriced +
+          result.activeChanged +
+          result.created +
+          result.pagesCreated +
+          result.analysesWritten >
+        0;
       if (changed) {
         state.lastChangeAt = new Date().toISOString();
         await this.revalidateSite();

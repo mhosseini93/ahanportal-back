@@ -268,3 +268,67 @@ export const priceHistory = pgTable(
   },
   (t) => [uniqueIndex('price_history_product_recorded_idx').on(t.productId, t.recordedAt)],
 );
+
+// ---------------------------------------------------------------------------
+// Automatic analysis text of chosen product and category pages
+// (src/analysis/). One row per page, replaced in place (no archive).
+
+export const ANALYSIS_TARGETS = ['product', 'category'] as const;
+export type AnalysisTarget = (typeof ANALYSIS_TARGETS)[number];
+// template = built by code, ai = written by a model, manual = edited in the panel
+export const ANALYSIS_SOURCES = ['template', 'ai', 'manual'] as const;
+export type AnalysisSource = (typeof ANALYSIS_SOURCES)[number];
+// held = unusual data stopped new text (the last one stays); failed = writing failed
+export const ANALYSIS_STATUSES = ['ok', 'held', 'failed'] as const;
+export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
+// today = kept until Tehran midnight; forever = until unlocked in the panel
+export const ANALYSIS_LOCKS = ['today', 'forever'] as const;
+export type AnalysisLock = (typeof ANALYSIS_LOCKS)[number];
+
+export const pageAnalyses = pgTable(
+  'page_analyses',
+  {
+    id: serial('id').primaryKey(),
+    targetType: text('target_type').$type<AnalysisTarget>().notNull(),
+    // products.id or categories.id (no foreign key: two target tables)
+    targetId: integer('target_id').notNull(),
+    // Chosen in the panel; off = the site shows its built-in summary
+    enabled: boolean('enabled').notNull().default(true),
+    // Plain text with {{placeholders}} the site fills with live numbers
+    paragraphs: jsonb('paragraphs').$type<string[]>().notNull().default([]),
+    // null until a text is written
+    source: text('source').$type<AnalysisSource>(),
+    // Qualitative state of the facts the text was written from
+    signature: text('signature'),
+    facts: jsonb('facts').$type<Record<string, unknown>>(),
+    status: text('status').$type<AnalysisStatus>().notNull().default('ok'),
+    statusReason: text('status_reason').notNull().default(''),
+    model: text('model').notNull().default(''),
+    locked: text('locked').$type<AnalysisLock>(),
+    lockedAt: timestamp('locked_at', { withTimezone: true }),
+    generatedAt: timestamp('generated_at', { withTimezone: true }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('page_analyses_target_idx').on(t.targetType, t.targetId)],
+);
+
+// One row per writing attempt, for cost and failure reasons (older rows are pruned)
+export const analysisRuns = pgTable(
+  'analysis_runs',
+  {
+    id: serial('id').primaryKey(),
+    targetType: text('target_type').$type<AnalysisTarget>().notNull(),
+    targetId: integer('target_id').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    ms: integer('ms').notNull().default(0),
+    writer: text('writer').notNull(),
+    model: text('model').notNull().default(''),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    // ok | rejected (guard) | error | held
+    result: text('result').notNull(),
+    reason: text('reason').notNull().default(''),
+  },
+  (t) => [index('analysis_runs_started_idx').on(t.startedAt)],
+);

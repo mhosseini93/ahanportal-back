@@ -4,16 +4,21 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 import { DatabaseService } from '../database/database.service.js';
 import {
   attributes,
   categories,
   categorySections,
+  pageAnalyses,
+  priceHistory,
   products,
   productTypes,
 } from '../database/schema.js';
+import { readNarrative } from '../analysis/narrative.js';
+import { analyzeCategory, CATEGORY_HISTORY_DAYS, type CategoryItem } from './category-analysis.js';
 import type { CategorySectionDto, UpsertCategoryDto } from './dto.js';
+import type { HistoryPoint } from './price-analysis.js';
 import { hasPageSql, listedSql } from './freshness.js';
 import { createProductPages } from './product-pages.js';
 import {
@@ -160,6 +165,10 @@ export class CategoriesService {
       .where(eq(categories.id, id))
       .returning({ id: categories.id });
     if (!deleted.length) throw new NotFoundException('دسته پیدا نشد');
+    // Its analysis text (no foreign key: page_analyses serves two tables)
+    await this.db
+      .delete(pageAnalyses)
+      .where(and(eq(pageAnalyses.targetType, 'category'), eq(pageAnalyses.targetId, id)));
     return { ok: true };
   }
 
@@ -306,14 +315,90 @@ export class CategoriesService {
         .orderBy(...ordered),
     ]);
     const sections = await this.publicSections(category.id, context, filterKeys);
+    const [analysis, narrative] = await Promise.all([
+      this.marketAnalysis(sections),
+      readNarrative(this.db, 'category', category.id),
+    ]);
     return {
       category: publicCategory(category),
       // Chosen filters in order; null = the site picks them from the columns
       filters: category.filterKeys ? filterColumns(filterKeys, context.attributes) : null,
       sections,
       ...priceStats(sections),
+      analysis,
+      // Automatic analysis text with {{placeholders}} (src/analysis/); null = none
+      narrative: analysis ? narrative : null,
       related,
     };
+  }
+
+  // What the analysis engine (src/analysis/) writes from; null = no such active category
+  async analysisFacts(id: number) {
+    const [category] = await this.db
+      .select()
+      .from(categories)
+      .where(and(eq(categories.id, id), eq(categories.isActive, true)))
+      .limit(1);
+    if (!category) return null;
+    const sections = await this.publicSections(category.id, await this.publicContext());
+    return {
+      category: { id: category.id, name: category.name, slug: category.slug },
+      ...priceStats(sections),
+      analysis: await this.marketAnalysis(sections),
+    };
+  }
+
+  // Market analysis of the list's priced products (category-analysis.ts), from
+  // one read of their attributes and one of their last CATEGORY_HISTORY_DAYS of history
+  private async marketAnalysis(sections: PublicSection[]) {
+    const rows = new Map(
+      sections.flatMap((s) => s.rows.filter((r) => r.price !== null).map((r) => [r.id, r] as const)),
+    );
+    if (!rows.size) return null;
+    const ids = [...rows.keys()];
+    const now = new Date();
+    const since = new Date(now.getTime() - CATEGORY_HISTORY_DAYS * 24 * 60 * 60 * 1000);
+
+    const [details, points] = await Promise.all([
+      this.db
+        .select({ id: products.id, productTypeId: products.productTypeId, attributes: products.attributes })
+        .from(products)
+        .where(inArray(products.id, ids)),
+      this.db.execute<{ product_id: number; recorded_at: Date | string; price: string | null }>(sql`
+        SELECT product_id, recorded_at, price::text AS price FROM (
+          SELECT DISTINCT ON (product_id) product_id, recorded_at, price
+          FROM ${priceHistory}
+          WHERE ${inArray(priceHistory.productId, ids)} AND recorded_at <= ${since}
+          ORDER BY product_id, recorded_at DESC
+        ) before
+        UNION ALL
+        SELECT product_id, recorded_at, price::text AS price
+        FROM ${priceHistory}
+        WHERE ${inArray(priceHistory.productId, ids)} AND recorded_at > ${since}
+        ORDER BY product_id, recorded_at`),
+    ]);
+
+    const history = new Map<number, HistoryPoint[]>();
+    for (const p of points.rows) {
+      const list = history.get(p.product_id) ?? [];
+      list.push({ date: new Date(p.recorded_at), price: p.price === null ? null : Number(p.price) });
+      history.set(p.product_id, list);
+    }
+    const items: CategoryItem[] = details.map((d) => {
+      const row = rows.get(d.id)!;
+      return {
+        id: d.id,
+        name: row.name,
+        slug: row.slug,
+        hasPage: row.hasPage,
+        productTypeId: d.productTypeId,
+        unit: row.unit,
+        attributes: d.attributes,
+        price: row.price!,
+        priceUpdatedAt: row.priceUpdatedAt,
+      };
+    });
+    return analyzeCategory(items, history, now);
   }
 
   private async publicContext() {

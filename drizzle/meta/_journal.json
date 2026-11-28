@@ -99,6 +99,13 @@
       "when": 1795520521803,
       "tag": "0013_product_page_created",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1795875437727,
+      "tag": "0014_page_analyses",
+      "breakpoints": true
     }
   ]
 }
